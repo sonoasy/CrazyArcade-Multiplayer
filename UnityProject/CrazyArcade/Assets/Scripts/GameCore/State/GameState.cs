@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-
+using CrazyArcade.GameCore;
 public class GameState
 {
     public Dictionary<ulong, PlayerState> Players = new();
