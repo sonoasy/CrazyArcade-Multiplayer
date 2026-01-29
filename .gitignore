@@ -14,6 +14,13 @@ UnityProject/[Rr]ecordings/
 UnityProject/[Aa]ssets/Plugins/Editor/JetBrains*
 UnityProject/*.DotSettings.user
 
+# Server Project ignores (추가!)
+Server/bin/
+Server/obj/
+Server/.vs/
+Server/*.user
+Server/*.suo
+ 
 # Visual Studio / Rider
 .vs/
 .idea/

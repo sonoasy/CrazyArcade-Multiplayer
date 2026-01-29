@@ -1,4 +1,4 @@
-public enum PlayerMoveState
+ public enum PlayerMoveState
 {
     Idle,
     Moving

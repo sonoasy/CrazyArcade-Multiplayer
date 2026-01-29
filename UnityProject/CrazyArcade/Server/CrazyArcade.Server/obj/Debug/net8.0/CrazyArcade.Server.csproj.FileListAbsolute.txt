@@ -1,0 +1,15 @@
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\bin\Debug\net8.0\CrazyArcade.Server.exe
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\bin\Debug\net8.0\CrazyArcade.Server.deps.json
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\bin\Debug\net8.0\CrazyArcade.Server.runtimeconfig.json
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\bin\Debug\net8.0\CrazyArcade.Server.dll
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\bin\Debug\net8.0\CrazyArcade.Server.pdb
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\CrazyArcade.Server.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\CrazyArcade.Server.AssemblyInfoInputs.cache
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\CrazyArcade.Server.AssemblyInfo.cs
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\CrazyArcade.Server.csproj.CoreCompileInputs.cache
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\CrazyArcade.Server.sourcelink.json
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\CrazyArcade.Server.dll
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\refint\CrazyArcade.Server.dll
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\CrazyArcade.Server.pdb
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\CrazyArcade.Server.genruntimeconfig.cache
+C:\Users\AhnSeoYeon\Desktop\CrazyArcade-Multiplayer\UnityProject\CrazyArcade\Server\CrazyArcade.Server\obj\Debug\net8.0\ref\CrazyArcade.Server.dll
