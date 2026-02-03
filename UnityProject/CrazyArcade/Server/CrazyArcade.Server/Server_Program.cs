@@ -6,27 +6,50 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using static NetworkPacket;
 
-class Program
+class Server_Program
 {
-    // 연결된 클라이언트 관리
     private static ConcurrentDictionary<ulong, ClientConnection> clients = new();
     private static ulong nextPlayerId = 1;
+
+    // ★ 추가: 게임 상태 관리
+    private static bool gameStarted = false;
+    private static int maxPlayers = 2;  // 최대 2명
+
+    private static ConcurrentDictionary<string, BalloonInfo> activeBalloons = new();
 
     static async Task Main(string[] args)
     {
         TcpListener server = new TcpListener(IPAddress.Any, 12345);
         server.Start();
         Console.WriteLine("크레이지 아케이드 서버 시작! 포트 12345");
+        Console.WriteLine($"최대 플레이어: {maxPlayers}명");
 
         while (true)
         {
             TcpClient client = await server.AcceptTcpClientAsync();
+
+            // ★ 추가: 게임 진행 중이거나 인원 꽉 찼으면 거부
+            if (gameStarted || clients.Count >= maxPlayers)
+            {
+                Console.WriteLine($"[거부] 게임 진행 중이거나 인원 초과 (현재: {clients.Count}/{maxPlayers})");
+                client.Close();
+                continue;
+            }
+
             ulong playerId = nextPlayerId++;
-            Console.WriteLine($"[접속] 플레이어 {playerId}");
+            Console.WriteLine($"[접속] 플레이어 {playerId} (현재 인원: {clients.Count + 1}/{maxPlayers})");
 
             var connection = new ClientConnection(playerId, client);
             clients.TryAdd(playerId, connection);
+
+            // ★ 추가: 2명 모이면 게임 시작
+            if (clients.Count == maxPlayers)
+            {
+                gameStarted = true;
+                Console.WriteLine("[게임 시작!] 모든 플레이어 접속 완료");
+            }
 
             _ = Task.Run(() => HandleClient(connection));
         }
@@ -36,10 +59,8 @@ class Program
     {
         try
         {
-            // 접속 환영 패킷 전송
             await SendGameState(connection);
 
-            // 패킷 처리 루프
             byte[] buffer = new byte[4096];
             while (connection.IsConnected)
             {
@@ -60,16 +81,22 @@ class Program
         {
             Console.WriteLine($"[퇴장] 플레이어 {connection.PlayerId}");
 
-            // 연결 종료 처리
             clients.TryRemove(connection.PlayerId, out _);
             connection.Disconnect();
 
-            // 다른 플레이어들에게 알림
             var disconnectPacket = new DisconnectPacket
             {
                 PlayerId = connection.PlayerId
             };
             await BroadcastPacket(disconnectPacket, connection.PlayerId);
+
+            // ★ 추가: 모든 플레이어 퇴장 시 게임 리셋
+            if (clients.Count == 0)
+            {
+                Console.WriteLine("[초기화] 모든 플레이어 퇴장 - 게임 리셋, ID 초기화");
+                gameStarted = false;
+                nextPlayerId = 1;  // ID를 1로 초기화!
+            }
         }
     }
 
@@ -84,7 +111,9 @@ class Program
                 case PacketType.PlayerMove:
                     await HandlePlayerMove(connection, data);
                     break;
-
+                case PacketType.PlaceBalloon:
+                    await HandlePlaceBalloon(connection, data);
+                    break;
                 default:
                     Console.WriteLine($"[경고] 알 수 없는 패킷 타입: {type}");
                     break;
@@ -98,7 +127,6 @@ class Program
 
     static async Task HandlePlayerMove(ClientConnection connection, byte[] data)
     {
-        // JSON 원본 출력
         string json = Encoding.UTF8.GetString(data);
         Console.WriteLine($"[디버그] 받은 JSON: {json}");
 
@@ -110,12 +138,10 @@ class Program
 
         Console.WriteLine($"[이동] 플레이어 {movePacket.PlayerId}: ({movePacket.TargetGridPos.X}, {movePacket.TargetGridPos.Y})");
 
-        // 플레이어 상태 업데이트
         connection.PlayerState.GridPos = movePacket.TargetGridPos;
         connection.PlayerState.TargetGridPos = null;
         connection.PlayerState.MoveState = PlayerMoveState.Idle;
 
-        // 모든 클라이언트에게 브로드캐스트
         var statePacket = new PlayerStatePacket
         {
             Player = connection.PlayerState
@@ -126,19 +152,27 @@ class Program
 
     static async Task SendGameState(ClientConnection connection)
     {
-        // 새 플레이어 상태 초기화
+        Int2[] spawnPositions = new Int2[]
+        {
+            new Int2(-6, -5),   // 플레이어 1
+            new Int2(-4, -5),   // 플레이어 2
+            new Int2(-6, -3),   // 플레이어 3
+            new Int2(-4, -3)    // 플레이어 4
+        };
+
+        int spawnIndex = ((int)(connection.PlayerId - 1)) % spawnPositions.Length;
+
         connection.PlayerState = new PlayerState
         {
             PlayerId = connection.PlayerId,
-            GridPos = new Int2(1, 1),
+            GridPos = spawnPositions[spawnIndex],
             MoveState = PlayerMoveState.Idle,
             BaseState = BaseState.Normal,
             Stats = new PlayerStats()
         };
 
-        Console.WriteLine($"[상태] 플레이어 {connection.PlayerId}의 현재 위치: ({connection.PlayerState.GridPos.X}, {connection.PlayerState.GridPos.Y})");
+        Console.WriteLine($"[상태] 플레이어 {connection.PlayerId}의 시작 위치: ({connection.PlayerState.GridPos.X}, {connection.PlayerState.GridPos.Y})");
 
-        // ★ 중요: 여기서 Players 배열 확인!
         var allPlayers = clients.Values.Select(c => c.PlayerState).ToArray();
         Console.WriteLine($"[디버그] 전송할 플레이어 수: {allPlayers.Length}");
 
@@ -154,7 +188,6 @@ class Program
             }
         }
 
-        // 현재 게임 상태 전송
         var gameStatePacket = new GameStatePacket
         {
             MyPlayerId = connection.PlayerId,
@@ -168,13 +201,13 @@ class Program
 
         Console.WriteLine($"[전송] 플레이어 {connection.PlayerId}에게 게임 상태 전송");
 
-        // 기존 플레이어들에게 새 플레이어 알림
         var newPlayerPacket = new PlayerStatePacket
         {
             Player = connection.PlayerState
         };
         await BroadcastPacket(newPlayerPacket, connection.PlayerId);
     }
+
     static async Task BroadcastPacket<T>(T packet, ulong? excludePlayerId = null) where T : NetworkPacket
     {
         byte[] data = PacketSerializer.Serialize(packet);
@@ -190,9 +223,88 @@ class Program
 
         await Task.WhenAll(tasks);
     }
+    // ★ 물풍선 설치 처리
+    static async Task HandlePlaceBalloon(ClientConnection connection, byte[] data)
+    {
+        var packet = PacketSerializer.Deserialize<PlaceBalloonPacket>(data);
+
+        string key = $"{packet.GridPos.X},{packet.GridPos.Y}";
+
+        // 이미 물풍선이 있으면 무시
+        if (activeBalloons.ContainsKey(key))
+        {
+            Console.WriteLine($"[물풍선] 위치 ({packet.GridPos.X}, {packet.GridPos.Y})에 이미 존재");
+            return;
+        }
+
+        Console.WriteLine($"[물풍선] 플레이어 {packet.PlayerId}가 ({packet.GridPos.X}, {packet.GridPos.Y})에 설치, 범위: {packet.Range}");
+
+        // 물풍선 정보 저장
+        var balloonInfo = new BalloonInfo
+        {
+            GridPos = packet.GridPos,
+            Range = packet.Range,
+            PlayerId = packet.PlayerId
+        };
+
+        activeBalloons.TryAdd(key, balloonInfo);
+
+        // 모든 클라이언트에게 브로드캐스트
+        await BroadcastPacket(packet);
+
+        // 3초 후 폭발 예약
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(3000);
+            await ExplodeBalloon(packet.GridPos, packet.Range);
+        });
+    }
+
+    // ★ 물풍선 폭발 처리
+    static async Task ExplodeBalloon(Int2 gridPos, int range)
+    {
+        string key = $"{gridPos.X},{gridPos.Y}";
+
+        if (!activeBalloons.TryRemove(key, out _))
+        {
+            Console.WriteLine($"[폭발] 물풍선이 이미 제거됨: ({gridPos.X}, {gridPos.Y})");
+            return;
+        }
+
+        Console.WriteLine($"[폭발] 물풍선 폭발: ({gridPos.X}, {gridPos.Y}), 범위: {range}");
+
+        // 폭발 범위 계산 (4방향)
+        var affectedCells = new List<Int2>();
+        affectedCells.Add(gridPos); // 중심
+
+        // 상하좌우로 range만큼
+        for (int i = 1; i <= range; i++)
+        {
+            affectedCells.Add(new Int2(gridPos.X + i, gridPos.Y)); // 우
+            affectedCells.Add(new Int2(gridPos.X - i, gridPos.Y)); // 좌
+            affectedCells.Add(new Int2(gridPos.X, gridPos.Y + i)); // 상
+            affectedCells.Add(new Int2(gridPos.X, gridPos.Y - i)); // 하
+        }
+
+        // 폭발 패킷 전송
+        var explodePacket = new BalloonExplodePacket
+        {
+            GridPos = gridPos,
+            AffectedCells = affectedCells.ToArray()
+        };
+
+        await BroadcastPacket(explodePacket);
+    }
+
+    // ★ 물풍선 정보 클래스
+    class BalloonInfo
+    {
+        public Int2 GridPos { get; set; }
+        public int Range { get; set; }
+        public ulong PlayerId { get; set; }
+    }
 }
 
-// 클라이언트 연결 정보
 class ClientConnection
 {
     public ulong PlayerId { get; }
@@ -232,4 +344,5 @@ class ClientConnection
         }
         catch { }
     }
+    
 }

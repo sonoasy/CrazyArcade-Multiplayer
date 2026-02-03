@@ -31,4 +31,27 @@ public class NetworkPacket
         Type = type;
         Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     }
+
+
+
+    // 물풍선 설치 패킷
+    [Serializable]
+    public class PlaceBalloonPacket : NetworkPacket
+    {
+        public ulong PlayerId;
+        public Int2 GridPos;
+        public int Range;
+
+        public PlaceBalloonPacket() : base(PacketType.PlaceBalloon) { }
+    }
+
+    // 물풍선 폭발 패킷
+    [Serializable]
+    public class BalloonExplodePacket : NetworkPacket
+    {
+        public Int2 GridPos;
+        public Int2[] AffectedCells;  // 폭발 범위
+
+        public BalloonExplodePacket() : base(PacketType.BalloonExplode) { }
+    }
 }

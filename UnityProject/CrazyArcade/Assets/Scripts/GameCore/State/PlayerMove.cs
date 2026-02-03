@@ -119,12 +119,19 @@ public class PlayerMove : MonoBehaviour
 
     void HandlePlaceBalloon()
     {
-        if (placedBalloonCount < maxBalloons && balloonManager.PlaceBalloon(currentGridPos, balloonRange, this))
+        if (placedBalloonCount < maxBalloons)
         {
-            balloonAtMyFeet = currentGridPos;
-            isOnMyBalloon = true;
-            hasLeftMyBalloon = false;
-            placedBalloonCount++;
+            // ★ 서버로 물풍선 설치 알림 (먼저!)
+            NetworkClient.Instance.SendPlaceBalloon(currentGridPos, balloonRange);
+
+            // 로컬에서도 즉시 생성 (반응성을 위해)
+            if (balloonManager.PlaceBalloon(currentGridPos, balloonRange, this))
+            {
+                balloonAtMyFeet = currentGridPos;
+                isOnMyBalloon = true;
+                hasLeftMyBalloon = false;
+                placedBalloonCount++;
+            }
         }
     }
 
