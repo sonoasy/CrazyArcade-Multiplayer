@@ -1,16 +1,42 @@
-using UnityEngine;
+Ôªøusing UnityEngine;
 using System.Net.Sockets;
-using System.Text;
+using System.Collections.Generic;
+using System;
 using System.Threading.Tasks;
+using UnityEngine.Tilemaps;
 
 public class NetworkClient : MonoBehaviour
 {
+    public static NetworkClient Instance;
     private TcpClient client;
     private NetworkStream stream;
-    private bool isConnected = false;
+    public bool isConnected = false;
+    private ulong myPlayerId;
+    private Dictionary<ulong, GameObject> allPlayers = new Dictionary<ulong, GameObject>();
+
+    public GameObject playerPrefab;
+    public Tilemap groundTilemap;
+
+    void Awake()
+    {
+        Debug.Log("[NetworkClient] Awake");
+        if (Instance == null) Instance = this;
+
+        // Ïù¥ Î∂ÄÎ∂ÑÏù¥ ÏûàÎÇò
+        if (FindObjectOfType<UnityMainThreadDispatcher>() == null)
+        {
+            GameObject dispatcher = new GameObject("MainThreadDispatcher");
+            dispatcher.AddComponent<UnityMainThreadDispatcher>();
+            Debug.Log("[NetworkClient] Created MainThreadDispatcher");
+        }
+
+        if (groundTilemap == null)
+            groundTilemap = GameObject.Find("Ground")?.GetComponent<Tilemap>();
+    }
 
     async void Start()
     {
+        Debug.Log("[NetworkClient] Start");
         await ConnectToServer();
     }
 
@@ -18,56 +44,271 @@ public class NetworkClient : MonoBehaviour
     {
         try
         {
+            Debug.Log("[Connect] Trying to connect...");
             client = new TcpClient();
             await client.ConnectAsync("127.0.0.1", 12345);
             stream = client.GetStream();
             isConnected = true;
-
-            Debug.Log("º≠πˆ ø¨∞· º∫∞¯!");
-
-            _ = Task.Run(ReceiveMessages);
+            Debug.Log("[Connect] Success!");
+            _ = Task.Run(ReceivePackets);
         }
-        catch (System.Exception e)
+        catch (Exception e)
         {
-            Debug.LogError($"º≠πˆ ø¨∞· Ω«∆–: {e.Message}");
+            Debug.LogError("[Connect] Failed: " + e.Message);
+            isConnected = false;
         }
     }
 
-    async Task ReceiveMessages()
+    async Task ReceivePackets()
     {
-        byte[] buffer = new byte[1024];
+        byte[] buffer = new byte[8192];
+        Debug.Log("[Receive] Waiting for packets...");
 
-        while (isConnected && client.Connected)
+        while (isConnected && client != null && client.Connected)
         {
             try
             {
                 int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-                if (bytesRead == 0) break;
+                if (bytesRead == 0)
+                {
+                    Debug.Log("[Receive] Server closed connection");
+                    break;
+                }
 
-                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                Debug.Log($"º≠πˆø°º≠ πﬁ¿Ω: {message}");
+                byte[] data = new byte[bytesRead];
+                Array.Copy(buffer, data, bytesRead);
+
+                Debug.Log("[Receive] Packet received: " + bytesRead + " bytes");
+
+                UnityMainThreadDispatcher.Enqueue(() =>
+                {
+                    Debug.Log("[Receive] Processing on main thread");
+                    ProcessPacket(data);
+                });
             }
-            catch (System.Exception e)
+            catch (Exception e)
             {
-                Debug.LogError($"ºˆΩ≈ ø¿∑˘: {e.Message}");
+                Debug.LogError("[Receive] Error: " + e.Message);
                 break;
             }
         }
+
+        isConnected = false;
+        Debug.Log("[Receive] Loop ended");
     }
 
-    public async void SendMessage(string message)
+    void ProcessPacket(byte[] data)
     {
-        if (!isConnected || stream == null) return;
+        try
+        {
+            Debug.Log("[Process] ProcessPacket started");
+            string json = System.Text.Encoding.UTF8.GetString(data);
+            Debug.Log("[Process] Received JSON: " + json);
 
-        byte[] data = Encoding.UTF8.GetBytes(message);
-        await stream.WriteAsync(data, 0, data.Length);
-        Debug.Log($"º≠πˆ∑Œ ¿¸º€: {message}");
+            PacketType type = PacketSerializer.GetPacketType(data);
+            Debug.Log("[Process] Packet type: " + type);
+
+            if (type == PacketType.GameState)
+            {
+                Debug.Log("[Process] GameState packet");
+                var packet = PacketSerializer.Deserialize<GameStatePacket>(data);
+
+                Debug.Log("[Process] Deserialized - MyPlayerId: " + packet.MyPlayerId);
+                Debug.Log("[Process] Deserialized - Players null? " + (packet.Players == null));
+
+                if (packet.Players != null)
+                {
+                    Debug.Log("[Process] Players length: " + packet.Players.Length);
+                }
+
+                myPlayerId = packet.MyPlayerId;
+                Debug.Log("[Process] My Player ID: " + myPlayerId);
+
+                if (packet.Players == null)
+                {
+                    Debug.LogError("[Process] packet.Players is NULL!");
+                    return;
+                }
+
+                // ‚òÖ Ïù¥ Î∂ÄÎ∂ÑÏù¥ Îπ†Ï†∏ÏûàÏóàÏñ¥Ïöî!
+                Debug.Log("[Process] Total players: " + packet.Players.Length);
+
+                foreach (var p in packet.Players)
+                {
+                    if (p == null)
+                    {
+                        Debug.LogError("[Process] Player in array is NULL!");
+                        continue;
+                    }
+
+                    if (p.GridPos == null)
+                    {
+                        Debug.LogError("[Process] Player " + p.PlayerId + " has NULL GridPos!");
+                        continue;
+                    }
+
+                    Debug.Log("[Process] Player info - ID: " + p.PlayerId + ", Pos: (" + p.GridPos.X + ", " + p.GridPos.Y + ")");
+                    SpawnPlayer(p);
+                }
+            }
+            else if (type == PacketType.PlayerState)
+            {
+                Debug.Log("[Process] PlayerState packet");
+                var packet = PacketSerializer.Deserialize<PlayerStatePacket>(data);
+
+                if (allPlayers.TryGetValue(packet.Player.PlayerId, out GameObject go))
+                {
+                    if (packet.Player.PlayerId != myPlayerId)
+                    {
+                        Vector3Int gridPos = new Vector3Int(packet.Player.GridPos.X, packet.Player.GridPos.Y, 0);
+                        if (groundTilemap != null)
+                        {
+                            go.transform.position = groundTilemap.GetCellCenterWorld(gridPos);
+                        }
+                        else
+                        {
+                            go.transform.position = new Vector3(packet.Player.GridPos.X, packet.Player.GridPos.Y, 0);
+                        }
+                        Debug.Log("[Process] Updated player " + packet.Player.PlayerId + " position");
+                    }
+                }
+                else
+                {
+                    Debug.Log("[Process] New player needs to be spawned: " + packet.Player.PlayerId);
+                    SpawnPlayer(packet.Player);
+                }
+            }
+            else if (type == PacketType.Disconnect)
+            {
+                var packet = PacketSerializer.Deserialize<DisconnectPacket>(data);
+                if (allPlayers.TryGetValue(packet.PlayerId, out GameObject go))
+                {
+                    Destroy(go);
+                    allPlayers.Remove(packet.PlayerId);
+                    Debug.Log("[Process] Player disconnected: " + packet.PlayerId);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[Process] Error: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+    void SpawnPlayer(PlayerState state)
+    {
+        try
+        {
+            Debug.Log("[Spawn] SpawnPlayer called for ID: " + state.PlayerId);
+
+            if (allPlayers.ContainsKey(state.PlayerId))
+            {
+                Debug.Log("[Spawn] Player already exists: " + state.PlayerId);
+                return;
+            }
+
+            if (playerPrefab == null)
+            {
+                Debug.LogError("[Spawn] playerPrefab is null!");
+                return;
+            }
+
+            Vector3Int gridPos = new Vector3Int(state.GridPos.X, state.GridPos.Y, 0);
+            Vector3 worldPos;
+
+            if (groundTilemap != null)
+            {
+                worldPos = groundTilemap.GetCellCenterWorld(gridPos);
+                Debug.Log("[Spawn] Grid " + gridPos + " to World " + worldPos);
+            }
+            else
+            {
+                Debug.LogWarning("[Spawn] groundTilemap is null!");
+                worldPos = new Vector3(state.GridPos.X, state.GridPos.Y, 0);
+            }
+
+            worldPos = new Vector3(-123, 18, 0);  // ÌååÎûÄÏÉâ ÏúÑÏπòÎ°ú Í∞ïÏ†ú Ïù¥Îèô!
+
+            GameObject go = Instantiate(playerPrefab, worldPos, Quaternion.identity);
+            Debug.Log("[Spawn] GameObject created: " + go.name);
+
+            // ‚òÖ PlayerMove Í∞ÄÏ†∏Ïò§Í±∞ÎÇò Ï∂îÍ∞Ä
+            PlayerMove move = go.GetComponent<PlayerMove>();
+            if (move == null)
+            {
+                move = go.AddComponent<PlayerMove>();
+                Debug.Log("[Spawn] Added PlayerMove component");
+            }
+
+            // Ï¥àÍ∏∞Ìôî
+            move.Initialize(state.PlayerId, state.PlayerId == myPlayerId);
+            Debug.Log("[Spawn] PlayerMove initialized - ID: " + state.PlayerId + ", Local: " + (state.PlayerId == myPlayerId));
+
+            allPlayers[state.PlayerId] = go;
+            Debug.Log("[Spawn] Added to allPlayers. Total count: " + allPlayers.Count);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[Spawn] Error: " + e.Message + "\n" + e.StackTrace);
+        }
     }
 
-    void OnDestroy()
+    public async void SendMyMove(Int2 pos)
+    {
+        if (!isConnected || stream == null)
+        {
+            Debug.LogWarning("[Send] Not connected");
+            return;
+        }
+
+        try
+        {
+            var packet = new PlayerMovePacket { PlayerId = myPlayerId, TargetGridPos = pos };
+            byte[] data = PacketSerializer.Serialize(packet);
+            await stream.WriteAsync(data, 0, data.Length);
+            Debug.Log("[Send] Move packet sent: (" + pos.X + ", " + pos.Y + ")");
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[Send] Failed: " + e.Message);
+            isConnected = false;
+        }
+    }
+
+    void OnApplicationQuit()
     {
         isConnected = false;
         stream?.Close();
         client?.Close();
+        Debug.Log("[App] Quit");
+    }
+}
+
+public class UnityMainThreadDispatcher : MonoBehaviour
+{
+    private static readonly Queue<Action> _executionQueue = new Queue<Action>();
+    private static UnityMainThreadDispatcher _instance;
+
+    void Awake()
+    {
+        if (_instance == null)
+        {
+            _instance = this;
+            DontDestroyOnLoad(gameObject);
+        }
+    }
+
+    void Update()
+    {
+        lock (_executionQueue)
+        {
+            while (_executionQueue.Count > 0)
+                _executionQueue.Dequeue().Invoke();
+        }
+    }
+
+    public static void Enqueue(Action action)
+    {
+        lock (_executionQueue)
+            _executionQueue.Enqueue(action);
     }
 }

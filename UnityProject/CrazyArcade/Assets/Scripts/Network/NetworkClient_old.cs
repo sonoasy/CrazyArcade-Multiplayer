@@ -3,7 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 
-public class NetworkClient : MonoBehaviour
+public class NetworkClient_old : MonoBehaviour
 {
     private TcpClient client;
     private NetworkStream stream;
@@ -22,34 +22,34 @@ public class NetworkClient : MonoBehaviour
             await client.ConnectAsync("127.0.0.1", 12345);
             stream = client.GetStream();
             isConnected = true;
-            
-            Debug.Log("ì„œë²„ ì—°ê²° ì„±ê³µ!");
-            
+
+            Debug.Log("¼­¹ö ¿¬°á ¼º°ø!");
+
             _ = Task.Run(ReceiveMessages);
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"ì„œë²„ ì—°ê²° ì‹¤íŒ¨: {e.Message}");
+            Debug.LogError($"¼­¹ö ¿¬°á ½ÇÆĞ: {e.Message}");
         }
     }
 
     async Task ReceiveMessages()
     {
         byte[] buffer = new byte[1024];
-        
+
         while (isConnected && client.Connected)
         {
             try
             {
                 int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
                 if (bytesRead == 0) break;
-                
+
                 string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                Debug.Log($"ì„œë²„ì—ì„œ ë°›ìŒ: {message}");
+                Debug.Log($"¼­¹ö¿¡¼­ ¹ŞÀ½: {message}");
             }
             catch (System.Exception e)
             {
-                Debug.LogError($"ìˆ˜ì‹  ì˜¤ë¥˜: {e.Message}");
+                Debug.LogError($"¼ö½Å ¿À·ù: {e.Message}");
                 break;
             }
         }
@@ -58,10 +58,10 @@ public class NetworkClient : MonoBehaviour
     public async void SendMessage(string message)
     {
         if (!isConnected || stream == null) return;
-        
+
         byte[] data = Encoding.UTF8.GetBytes(message);
         await stream.WriteAsync(data, 0, data.Length);
-        Debug.Log($"ì„œë²„ë¡œ ì „ì†¡: {message}");
+        Debug.Log($"¼­¹ö·Î Àü¼Û: {message}");
     }
 
     void OnDestroy()

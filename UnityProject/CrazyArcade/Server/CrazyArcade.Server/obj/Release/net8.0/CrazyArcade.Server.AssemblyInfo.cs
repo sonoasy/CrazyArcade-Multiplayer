@@ -12,9 +12,9 @@ using System;
 using System.Reflection;
 
 [assembly: System.Reflection.AssemblyCompanyAttribute("CrazyArcade.Server")]
-[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7570f65b9092a8ff4c80335ba919838ea0e76c4a")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
 [assembly: System.Reflection.AssemblyProductAttribute("CrazyArcade.Server")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CrazyArcade.Server")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

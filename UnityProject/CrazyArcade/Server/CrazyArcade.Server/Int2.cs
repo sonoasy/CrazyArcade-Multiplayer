@@ -3,8 +3,8 @@ using System;
 [Serializable]
 public struct Int2
 {
-    public int X;  // Property → Field로!
-    public int Y;  // Property → Field로!
+    public int X; //{ get; set; }  // 대문자!
+    public int Y;// { get; set; }  // 대문자!
 
     public Int2(int x, int y)
     {

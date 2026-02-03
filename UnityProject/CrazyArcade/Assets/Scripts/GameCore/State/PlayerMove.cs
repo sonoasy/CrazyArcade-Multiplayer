@@ -3,11 +3,14 @@ using UnityEngine.Tilemaps;
 
 public class PlayerMove : MonoBehaviour
 {
-    public float moveSpeed = 5f;
+    public float moveSpeed = 100f;
     public Tilemap groundTilemap;
     public Tilemap wallTilemap;
     public Tilemap objectTilemap;
     public WaterBalloonManager balloonManager;
+
+    public bool isLocalPlayer = false;
+    public ulong playerId;
 
     private BaseState currentState = BaseState.Normal;
     private float trappedMoveSpeed = 0.5f;
@@ -19,62 +22,65 @@ public class PlayerMove : MonoBehaviour
     private int placedBalloonCount = 0;
 
     private Vector3Int currentGridPos;
-    private Vector3Int balloonAtMyFeet;
+    private Vector3Int balloonAtMyFeet = new Vector3Int(-9999, -9999, 0);
     private bool isOnMyBalloon = false;
-    private bool hasLeftMyBalloon = false;  // ← 추가: 한 번이라도 벗어났는지
+    private bool hasLeftMyBalloon = false;
+
+    public void Initialize(ulong id, bool isMe)
+    {
+        this.playerId = id;
+        this.isLocalPlayer = isMe;
+
+        // ★ "Ground" → "GroudTilemap"으로 수정!
+        if (groundTilemap == null) groundTilemap = GameObject.Find("GroudTilemap")?.GetComponent<Tilemap>();
+        if (wallTilemap == null) wallTilemap = GameObject.Find("WallTilemap")?.GetComponent<Tilemap>();
+        if (objectTilemap == null) objectTilemap = GameObject.Find("ObjectTilemap")?.GetComponent<Tilemap>();
+        if (balloonManager == null) balloonManager = FindObjectOfType<WaterBalloonManager>();
+
+        // ★ 디버그 로그 추가
+        Debug.Log($"[PlayerMove] groundTilemap 찾음? {groundTilemap != null}");
+    }
 
     void Start()
     {
-        Vector3Int startCell = groundTilemap.WorldToCell(transform.position);
-        transform.position = groundTilemap.GetCellCenterWorld(startCell);
-        currentGridPos = startCell;
-        balloonAtMyFeet = new Vector3Int(-9999, -9999, 0);
+        if (groundTilemap != null)
+        {
+            Vector3Int startCell = groundTilemap.WorldToCell(transform.position);
+            transform.position = groundTilemap.GetCellCenterWorld(startCell);
+            currentGridPos = startCell;
+        }
     }
 
     void Update()
     {
-        if (currentState == BaseState.Dead)
-        {
-            return;
-        }
+        // ★ 순서 중요: null 체크를 먼저!
+        if (NetworkClient.Instance == null) return;
+        if (!isLocalPlayer) return;  // 원격 플레이어는 입력 처리 안 함
+        if (!NetworkClient.Instance.isConnected) return;
+        if (currentState == BaseState.Dead) return;
+
+        // ★ groundTilemap null 체크 추가!
+        if (groundTilemap == null) return;
 
         if (currentState == BaseState.Trapped)
         {
             trappedTimer += Time.deltaTime;
-
-            if (trappedTimer >= trappedDuration)
-            {
-                Die();
-                return;
-            }
+            if (trappedTimer >= trappedDuration) { Die(); return; }
         }
 
         currentGridPos = groundTilemap.WorldToCell(transform.position);
 
-        // 물풍선 설치
         if (currentState == BaseState.Normal && Input.GetKeyDown(KeyCode.Space))
         {
-            if (placedBalloonCount < maxBalloons)
-            {
-                if (balloonManager.PlaceBalloon(currentGridPos, balloonRange, this))
-                {
-                    balloonAtMyFeet = currentGridPos;
-                    isOnMyBalloon = true;
-                    hasLeftMyBalloon = false;  // ← 리셋
-                    placedBalloonCount++;
-                    Debug.Log($"물풍선 설치! ({placedBalloonCount}/{maxBalloons})");
-                }
-            }
-            else
-            {
-                Debug.Log("물풍선 최대 개수!");
-            }
+            HandlePlaceBalloon();
         }
 
-        // 이동 입력
-        float h = 0;
-        float v = 0;
+        HandleMovement();
+    }
 
+    void HandleMovement()
+    {
+        float h = 0, v = 0;
         if (Input.GetKey(KeyCode.UpArrow)) v = 1;
         else if (Input.GetKey(KeyCode.DownArrow)) v = -1;
         if (Input.GetKey(KeyCode.LeftArrow)) h = -1;
@@ -84,54 +90,45 @@ public class PlayerMove : MonoBehaviour
 
         if (h != 0 || v != 0)
         {
-            float currentMoveSpeed = currentState == BaseState.Trapped ? trappedMoveSpeed : moveSpeed;
-
-            Vector3 moveVec = new Vector3(h, v, 0) * currentMoveSpeed * Time.deltaTime;
-            Vector3 nextPos = transform.position + moveVec;
+            float speed = (currentState == BaseState.Trapped) ? trappedMoveSpeed : moveSpeed;
+            Vector3 nextPos = transform.position + new Vector3(h, v, 0) * speed * Time.deltaTime;
             Vector3Int nextCell = groundTilemap.WorldToCell(nextPos);
 
-            bool hasGround = groundTilemap.HasTile(nextCell);
-            bool hasWall = wallTilemap.HasTile(nextCell);
-            bool hasObject = objectTilemap.HasTile(nextCell);
-            bool hasBalloon = balloonManager.HasBalloon(nextCell);
-
-            // 내 발 밑 물풍선에서 벗어났는지 체크
-            if (isOnMyBalloon && nextCell != balloonAtMyFeet)
-            {
-                isOnMyBalloon = false;
-                hasLeftMyBalloon = true;  // ← 한 번 벗어남!
-                Debug.Log("물풍선에서 벗어남! 이제 못 들어감");
-            }
-
-            bool canMove = hasGround && !hasWall && !hasObject;
-
-            // 물풍선 체크
-            if (hasBalloon)
-            {
-                // 내가 설치한 물풍선이면서 아직 위에 있거나, 한 번도 안 벗어났으면 통과
-                if (nextCell == balloonAtMyFeet && !hasLeftMyBalloon)
-                {
-                    // 통과 가능
-                }
-                else
-                {
-                    // 못 지나감
-                    canMove = false;
-                }
-            }
-
-            if (canMove)
+            if (CanMove(nextCell))
             {
                 transform.position = nextPos;
+                if (nextCell != currentGridPos)
+                {
+                    NetworkClient.Instance.SendMyMove(new Int2(nextCell.x, nextCell.y));
+                }
             }
         }
     }
 
-    public void OnBalloonExploded()
+    bool CanMove(Vector3Int nextCell)
     {
-        placedBalloonCount--;
-        Debug.Log($"물풍선 폭발! 남은: ({placedBalloonCount}/{maxBalloons})");
+        if (!groundTilemap.HasTile(nextCell) || wallTilemap.HasTile(nextCell) || objectTilemap.HasTile(nextCell)) return false;
+
+        bool hasBalloon = balloonManager.HasBalloon(nextCell);
+        if (isOnMyBalloon && nextCell != balloonAtMyFeet) { isOnMyBalloon = false; hasLeftMyBalloon = true; }
+
+        if (hasBalloon && !(nextCell == balloonAtMyFeet && !hasLeftMyBalloon)) return false;
+
+        return true;
     }
+
+    void HandlePlaceBalloon()
+    {
+        if (placedBalloonCount < maxBalloons && balloonManager.PlaceBalloon(currentGridPos, balloonRange, this))
+        {
+            balloonAtMyFeet = currentGridPos;
+            isOnMyBalloon = true;
+            hasLeftMyBalloon = false;
+            placedBalloonCount++;
+        }
+    }
+
+    public void OnBalloonExploded() => placedBalloonCount--;
 
     public void GetTrapped()
     {
@@ -139,8 +136,6 @@ public class PlayerMove : MonoBehaviour
         {
             currentState = BaseState.Trapped;
             trappedTimer = 0f;
-            Debug.Log("물방울에 갇힘! 10초 후 죽음!");
-
             GetComponent<SpriteRenderer>().color = Color.cyan;
         }
     }
@@ -150,9 +145,6 @@ public class PlayerMove : MonoBehaviour
         if (currentState == BaseState.Trapped)
         {
             currentState = BaseState.Normal;
-            trappedTimer = 0f;
-            Debug.Log("구출됨!");
-
             GetComponent<SpriteRenderer>().color = Color.white;
         }
     }
@@ -160,13 +152,6 @@ public class PlayerMove : MonoBehaviour
     private void Die()
     {
         currentState = BaseState.Dead;
-        Debug.Log("플레이어 사망!");
-
         GetComponent<SpriteRenderer>().color = Color.gray;
-    }
-
-    public BaseState GetState()
-    {
-        return currentState;
     }
 }
