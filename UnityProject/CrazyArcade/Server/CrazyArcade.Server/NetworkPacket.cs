@@ -6,7 +6,7 @@ public enum PacketType
     // 연결
     Connect = 1,
     Disconnect = 2,
-    
+    Join=3,   // ⭐ 추가
     // 플레이어 이동
     PlayerMove = 10,
     PlayerState = 11,
@@ -17,6 +17,81 @@ public enum PacketType
     // 물풍선 (나중에)
     PlaceBalloon = 30,
     BalloonExplode = 31,
+    UseNeedle=32,
+
+    PlayerDie = 40,        // ★ 추가
+    GameOver = 41,         // ★ 추가
+    GameTimer = 42,         // ★ 추가
+    PlayerTrapped = 43,    // ★ 갇힘
+    PlayerRescued = 44,     // ★ 구출
+    ItemSpawn = 50,
+    ItemPickup = 51,
+    BlockDestroy = 60   // ★ 추가
+    
+}
+[Serializable]
+public class JoinPacket : NetworkPacket
+{
+    public string Nickname { get; set; }
+    public JoinPacket() : base(PacketType.Join) { }
+}
+[Serializable]
+public class UseNeedlePacket : NetworkPacket
+{
+    public ulong PlayerId;
+}
+// ★ 블록 파괴 패킷
+[Serializable]
+public class BlockDestroyPacket : NetworkPacket
+{
+    public Int2 GridPos;
+    public BlockDestroyPacket() : base(PacketType.BlockDestroy) { }
+}
+
+[Serializable]
+public class ItemSpawnPacket : NetworkPacket
+{
+    public string ItemId;
+    public ItemType ItemType;
+    public Int2 GridPos;
+    public ItemSpawnPacket() : base(PacketType.ItemSpawn) { }
+}
+
+// 아이템 획득 패킷
+[Serializable]
+public class ItemPickupPacket : NetworkPacket
+{
+    public string ItemId;
+    public ulong PlayerId;
+    public ItemType ItemType;
+    public ItemPickupPacket() : base(PacketType.ItemPickup) { }
+}
+// ★ 플레이어 죽음 패킷
+[Serializable]
+public class PlayerDiePacket : NetworkPacket
+{
+    public ulong PlayerId;
+
+    public PlayerDiePacket() : base(PacketType.PlayerDie) { }
+}
+
+// ★ 게임 종료 패킷
+[Serializable]
+public class GameOverPacket : NetworkPacket
+{
+    public ulong WinnerPlayerId;
+    public string Reason;  // "killed" or "timeout"
+
+    public GameOverPacket() : base(PacketType.GameOver) { }
+}
+
+// ★ 타이머 동기화 패킷
+[Serializable]
+public class GameTimerPacket : NetworkPacket
+{
+    public float RemainingTime;  // 남은 시간 (초)
+
+    public GameTimerPacket() : base(PacketType.GameTimer) { }
 }
 
 // 기본 패킷 클래스
@@ -52,5 +127,21 @@ public class NetworkPacket
         public Int2[] AffectedCells;  // 폭발 범위
 
         public BalloonExplodePacket() : base(PacketType.BalloonExplode) { }
+    }
+    // ★ 플레이어 갇힘 패킷
+    [Serializable]
+    public class PlayerTrappedPacket : NetworkPacket
+    {
+        public ulong PlayerId;
+        public PlayerTrappedPacket() : base(PacketType.PlayerTrapped) { }
+    }
+
+    // ★ 플레이어 구출 패킷
+    [Serializable]
+    public class PlayerRescuedPacket : NetworkPacket
+    {
+        public ulong PlayerId;
+        public ulong RescuerId;
+        public PlayerRescuedPacket() : base(PacketType.PlayerRescued) { }
     }
 }

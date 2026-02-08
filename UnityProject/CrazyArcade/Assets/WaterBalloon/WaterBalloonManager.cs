@@ -99,6 +99,7 @@ public class WaterBalloonManager : MonoBehaviour
 
             if (objectTilemap.HasTile(currentPos))
             {
+                /*
                 objectTilemap.SetTile(currentPos, null);
 
                 Vector3 worldPos = groundTilemap.GetCellCenterWorld(currentPos);
@@ -108,7 +109,7 @@ public class WaterBalloonManager : MonoBehaviour
 
                 // 플레이어 체크
                 CheckPlayerHit(currentPos);
-
+                */
                 break;
             }
 
@@ -118,7 +119,7 @@ public class WaterBalloonManager : MonoBehaviour
             Destroy(water2, 0.5f);
 
             // 플레이어 체크
-            CheckPlayerHit(currentPos);
+           // CheckPlayerHit(currentPos);
         }
     }
 

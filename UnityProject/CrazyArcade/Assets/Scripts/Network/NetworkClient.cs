@@ -2,12 +2,15 @@
 using System.Net.Sockets;
 using System.Collections.Generic;
 using System;
+using UnityEngine.UI;
+using TMPro;
 using System.Threading.Tasks;
 using UnityEngine.Tilemaps;
 using static NetworkPacket;
 
 public class NetworkClient : MonoBehaviour
 {
+    public string myNickname = "Player";
     public static NetworkClient Instance;
     private TcpClient client;
     private NetworkStream stream;
@@ -17,7 +20,7 @@ public class NetworkClient : MonoBehaviour
 
     public GameObject playerPrefab;
     public Tilemap groundTilemap;
-
+    public TextMeshProUGUI timerText;
     void Awake()
     {
         Debug.Log("[NetworkClient] Awake");
@@ -37,9 +40,14 @@ public class NetworkClient : MonoBehaviour
     async void Start()
     {
         Debug.Log("[NetworkClient] Start");
+        
+        DontDestroyOnLoad(gameObject);
+        myNickname = PlayerPrefs.GetString("NICKNAME", "Player");
+        Debug.Log("My Nickname: " + myNickname);
+
         await ConnectToServer();
     }
-
+    
     async Task ConnectToServer()
     {
         try
@@ -50,6 +58,16 @@ public class NetworkClient : MonoBehaviour
             stream = client.GetStream();
             isConnected = true;
             Debug.Log("[Connect] Success!");
+
+            // ⭐ 여기서 닉네임 전송
+            var joinPacket = new JoinPacket
+            {
+                Nickname = myNickname
+            };
+            byte[] joinData = PacketSerializer.Serialize(joinPacket);
+            await stream.WriteAsync(joinData, 0, joinData.Length);
+            Debug.Log("[Connect] JoinPacket sent: " + myNickname);
+
             _ = Task.Run(ReceivePackets);
         }
         catch (Exception e)
@@ -63,7 +81,7 @@ public class NetworkClient : MonoBehaviour
     {
         byte[] buffer = new byte[8192];
         Debug.Log("[Receive] Waiting for packets...");
-
+        string leftover = "";  // ★ 남은 데이터 저장
         while (isConnected && client != null && client.Connected)
         {
             try
@@ -74,17 +92,52 @@ public class NetworkClient : MonoBehaviour
                     Debug.Log("[Receive] Server closed connection");
                     break;
                 }
-
-                byte[] data = new byte[bytesRead];
-                Array.Copy(buffer, data, bytesRead);
-
-                Debug.Log("[Receive] Packet received: " + bytesRead + " bytes");
-
-                UnityMainThreadDispatcher.Enqueue(() =>
+                // ★ 받은 데이터를 문자열로 변환
+                string received = leftover + System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                leftover = "";
+                // ★ 여러 JSON 패킷 분리
+                List<string> packets = new List<string>();
+                int depth = 0;
+                int start = 0;
+                for (int i = 0; i < received.Length; i++)
                 {
-                    Debug.Log("[Receive] Processing on main thread");
-                    ProcessPacket(data);
-                });
+                    if (received[i] == '{') depth++;
+                    else if (received[i] == '}')
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            packets.Add(received.Substring(start, i - start + 1));
+                            start = i + 1;
+                        }
+                    }
+                }
+
+                // 남은 불완전한 데이터 저장
+                if (start < received.Length)
+                {
+                    leftover = received.Substring(start);
+                }
+
+                // ★ 각 패킷 처리
+                foreach (string packetJson in packets)
+                {
+                    byte[] data = System.Text.Encoding.UTF8.GetBytes(packetJson);
+                    UnityMainThreadDispatcher.Enqueue(() =>
+                    {
+                        ProcessPacket(data);
+                    });
+                }
+                // byte[] data = new byte[bytesRead];
+                //Array.Copy(buffer, data, bytesRead);
+
+                //   Debug.Log("[Receive] Packet received: " + bytesRead + " bytes");
+
+                //  UnityMainThreadDispatcher.Enqueue(() =>
+                //  {
+                //      Debug.Log("[Receive] Processing on main thread");
+                //      ProcessPacket(data);
+                //  });
             }
             catch (Exception e)
             {
@@ -148,33 +201,72 @@ public class NetworkClient : MonoBehaviour
 
                     Debug.Log("[Process] Player info - ID: " + p.PlayerId + ", Pos: (" + p.GridPos.X + ", " + p.GridPos.Y + ")");
                     SpawnPlayer(p);
+                    if (PlayerListUI.Instance != null)
+                    {
+                        Debug.Log($"[UI] AddPlayer call: {p.PlayerId}, {p.Nickname}");
+                        PlayerListUI.Instance.AddPlayer(p.PlayerId, p.Nickname);
+                    }
                 }
             }
             else if (type == PacketType.PlayerState)
             {
                 Debug.Log("[Process] PlayerState packet");
                 var packet = PacketSerializer.Deserialize<PlayerStatePacket>(data);
-
+                var p = packet.Player;
                 if (allPlayers.TryGetValue(packet.Player.PlayerId, out GameObject go))
                 {
-                    if (packet.Player.PlayerId != myPlayerId)
-                    {
+                   // if (packet.Player.PlayerId != myPlayerId)
+                   // {
+
+                        // ★ 내 플레이어면 스탯 업데이트
+                        if (packet.Player.PlayerId == myPlayerId)
+                        {
+                        
+
+                        PlayerMove move = go.GetComponent<PlayerMove>();
+                            if (move != null && packet.Player.Stats != null)
+                            {
+                                move.UpdateStats(packet.Player.Stats);
+                            }
+
+                        }
+
+
                         Vector3Int gridPos = new Vector3Int(packet.Player.GridPos.X, packet.Player.GridPos.Y, 0);
+                        Vector3 targetPos;  // ★ 추가
+
                         if (groundTilemap != null)
                         {
-                            go.transform.position = groundTilemap.GetCellCenterWorld(gridPos);
+                            //go.transform.position
+                            targetPos = groundTilemap.GetCellCenterWorld(gridPos);
                         }
                         else
                         {
-                            go.transform.position = new Vector3(packet.Player.GridPos.X, packet.Player.GridPos.Y, 0);
+                            //go.transform.position =
+                            targetPos = new Vector3(packet.Player.GridPos.X, packet.Player.GridPos.Y, 0);
                         }
-                        Debug.Log("[Process] Updated player " + packet.Player.PlayerId + " position");
-                    }
+                        // Debug.Log("[Process] Updated player " + packet.Player.PlayerId + " position");
+                        RemotePlayerController remoteController = go.GetComponent<RemotePlayerController>();
+                        if (remoteController != null)
+                        {
+                            remoteController.SetTargetPosition(targetPos);
+                            Debug.Log($"[Process] Smooth move to {targetPos}");
+                        }
+                        else
+                        {
+                            go.transform.position = targetPos;
+                            Debug.LogWarning("[Process] No RemotePlayerController, instant move");
+                        }
+                    //}
                 }
                 else
                 {
                     Debug.Log("[Process] New player needs to be spawned: " + packet.Player.PlayerId);
                     SpawnPlayer(packet.Player);
+                    if (PlayerListUI.Instance != null)
+                    {
+                        PlayerListUI.Instance.AddPlayer(p.PlayerId, p.Nickname);
+                    }
                 }
             }
             else if (type == PacketType.Disconnect)
@@ -232,12 +324,230 @@ public class NetworkClient : MonoBehaviour
 
                 // TODO: 여기에 실제 폭발 처리 추가 (타일 파괴 등)
                 // 지금은 서버에서 관리하고 있으니 로그만 출력
+            }// ★ 블록 파괴
+            else if (type == PacketType.BlockDestroy)
+            {
+                var packet = PacketSerializer.Deserialize<BlockDestroyPacket>(data);
+                Debug.Log($"[Block] Destroyed at ({packet.GridPos.X}, {packet.GridPos.Y})");
+
+                // 타일 지우기
+                WaterBalloonManager balloonMgr = FindObjectOfType<WaterBalloonManager>();
+                if (balloonMgr != null && balloonMgr.objectTilemap != null)
+                {
+                    Vector3Int pos = new Vector3Int(packet.GridPos.X, packet.GridPos.Y, 0);
+                    balloonMgr.objectTilemap.SetTile(pos, null);
+
+                    // ★ 이펙트 추가
+                    if (balloonMgr.waterEffectPrefab != null && balloonMgr.groundTilemap != null)
+                    {
+                        Vector3 worldPos = balloonMgr.groundTilemap.GetCellCenterWorld(pos);
+                        GameObject water = Instantiate(balloonMgr.waterEffectPrefab, worldPos, Quaternion.identity);
+                        water.transform.position = new Vector3(worldPos.x, worldPos.y, -0.5f);
+                        Destroy(water, 0.5f);
+                    }
+
+                }
+            }// ★ 아이템 스폰
+            else if (type == PacketType.ItemSpawn)
+            {
+                var packet = PacketSerializer.Deserialize<ItemSpawnPacket>(data);
+                Debug.Log($"[Item] Spawned {packet.ItemType} at ({packet.GridPos.X}, {packet.GridPos.Y})");
+
+                // TODO: 아이템 오브젝트 생성
+                // 아이템 오브젝트 생성
+                if (ItemManager.Instance != null)
+                {
+                    ItemManager.Instance.SpawnItem(packet.ItemId, packet.ItemType, packet.GridPos);
+                }
+            }    // ★ 아이템 획득
+            else if (type == PacketType.ItemPickup)
+            {
+                var packet = PacketSerializer.Deserialize<ItemPickupPacket>(data);
+                Debug.Log($"[Item] Player {packet.PlayerId} picked up {packet.ItemType}");
+
+                // TODO: 아이템 오브젝트 제거
+                // 아이템 오브젝트 제거
+                if (ItemManager.Instance != null)
+                {
+                    ItemManager.Instance.RemoveItem(packet.ItemId);
+                }
+                // ★ 내가 먹은 거면 스탯 업데이트
+                if (packet.PlayerId == myPlayerId)
+                {
+                    if (allPlayers.TryGetValue(myPlayerId, out GameObject go))
+                    {
+                        PlayerMove move = go.GetComponent<PlayerMove>();
+                        if (move != null)
+                        {
+                            // 아이템 타입에 따라 스탯 직접 증가
+                            if (packet.ItemType == ItemType.Potion)
+                            {
+                                move.balloonRange++;
+                                Debug.Log($"[Item] 물줄기 증가! 현재: {move.balloonRange}");
+                            }
+                            else if (packet.ItemType == ItemType.Balloon)
+                            {
+                                move.maxBalloons++;
+                                Debug.Log($"[Item] 물풍선 개수 증가! 현재: {move.maxBalloons}");
+                            }
+                            else if (packet.ItemType == ItemType.Roller)
+                            {
+                                move.moveSpeed += 50f;
+                                Debug.Log($"[Item] 속도 증가! 현재: {move.moveSpeed}");
+                            }
+                            else if (packet.ItemType == ItemType.Needle)
+                            {
+                                move.needleCount++;
+
+                                if (NeedleUI.Instance != null)
+                                {
+                                    NeedleUI.Instance.SetCount(move.needleCount);
+                                }
+
+                                Debug.Log($"[Item] Needle 획득! 현재: {move.needleCount}");
+                            }
+                        }
+                    }
+
+                }
+            }
+            else if (type == PacketType.GameTimer)
+            {
+                Debug.Log("[Timer] GameTimer packet received!");  // ★ 추가
+
+                var packet = PacketSerializer.Deserialize<GameTimerPacket>(data);
+
+                Debug.Log($"[Timer] RemainingTime: {packet.RemainingTime}");  // ★ 추가
+
+                int minutes = (int)packet.RemainingTime / 60;
+                int seconds = (int)packet.RemainingTime % 60;
+
+                Debug.Log($"[Timer] Formatted: {minutes:D2}:{seconds:D2}");  // ★ 추가
+
+                if (timerText != null)
+                {
+                    Debug.Log("[Timer] Updating UI...");  // ★ 추가
+                    timerText.text = $"TIMER:{minutes:D2}:{seconds:D2}";
+                    Debug.Log($"[Timer] UI updated to: {timerText.text}");  // ★ 추가
+                }
+                else
+                {
+                    Debug.LogError("[Timer] timerText is NULL!");  // ★ 추가
+                }
+            }
+            // ★ 플레이어 갇힘
+            else if (type == PacketType.PlayerTrapped)
+            {
+                var packet = PacketSerializer.Deserialize<PlayerTrappedPacket>(data);
+
+                if (allPlayers.TryGetValue(packet.PlayerId, out GameObject go))
+                {
+                    SpriteRenderer sr = go.GetComponent<SpriteRenderer>();
+                    if (sr != null)
+                    {
+                        sr.color = Color.cyan;  // 청록색!
+                    }
+
+                    PlayerMove move = go.GetComponent<PlayerMove>();
+                    if (move != null)
+                    {
+                        move.GetTrapped();
+                    }
+
+                    Debug.Log($"[Trapped] Player {packet.PlayerId} is trapped!");
+                }
+            }
+            // ★ 플레이어 죽음
+            else if (type == PacketType.PlayerDie)
+            {
+                var packet = PacketSerializer.Deserialize<PlayerDiePacket>(data);
+
+                if (allPlayers.TryGetValue(packet.PlayerId, out GameObject go))
+                {
+                    SpriteRenderer sr = go.GetComponent<SpriteRenderer>();
+                    if (sr != null)
+                    {
+                        sr.color = Color.gray;  // 회색으로 변경
+                    }
+
+                    PlayerMove move = go.GetComponent<PlayerMove>();
+                    if (move != null)
+                    {
+                        move.Die();  // 움직임 차단
+                    }
+
+                    Debug.Log($"[Die] Player {packet.PlayerId} died!");
+                }
+            }
+            // ★ 플레이어 구출 (바늘 사용)
+            else if (type == PacketType.PlayerRescued)
+            {
+                var packet = PacketSerializer.Deserialize<PlayerRescuedPacket>(data);
+
+                if (allPlayers.TryGetValue(packet.PlayerId, out GameObject go))
+                {
+                    PlayerMove move = go.GetComponent<PlayerMove>();
+                    if (move != null)
+                    {
+                        move.Rescue();
+                    }
+                }
+
+                // ★ 내가 구출된 경우 → UI 갱신
+                if (packet.PlayerId == myPlayerId)
+                {
+                    if (allPlayers.TryGetValue(myPlayerId, out GameObject me))
+                    {
+                        PlayerMove move = me.GetComponent<PlayerMove>();
+                        if (move != null && NeedleUI.Instance != null)
+                        {
+                            NeedleUI.Instance.SetCount(move.needleCount);
+                        }
+                    }
+                }
+
+                Debug.Log($"[Rescue] Player {packet.PlayerId} rescued by {packet.RescuerId}");
+            }
+
+            // ★ 게임 종료
+            else if (type == PacketType.GameOver)
+            {
+                var packet = PacketSerializer.Deserialize<GameOverPacket>(data);
+
+                if (packet.WinnerPlayerId == 0)
+                {
+                    Debug.Log("[Game Over] Draw!");
+                    // TODO: 무승부 UI
+                }
+                else
+                {
+                    Debug.Log($"[Game Over] Player {packet.WinnerPlayerId} wins! ({packet.Reason})");
+                    // TODO: 승리 UI
+                }
+            }// ★ 타이머 업데이트
+            else if (type == PacketType.GameTimer)
+            {
+                var packet = PacketSerializer.Deserialize<GameTimerPacket>(data);
+
+                int minutes = (int)packet.RemainingTime / 60;
+                int seconds = (int)packet.RemainingTime % 60;
+
+                // ★ UI 텍스트 업데이트
+                if (timerText != null)
+                {
+                    timerText.text = $"TIMER:{minutes:D2}:{seconds:D2}";
+                }
+
+                Debug.Log($"[Timer] {minutes:D2}:{seconds:D2}");
             }
         }
+
         catch (Exception e)
         {
             Debug.LogError("[Process] Error: " + e.Message + "\n" + e.StackTrace);
         }
+
+
     }
 
     void SpawnPlayer(PlayerState state)
@@ -305,6 +615,18 @@ public class NetworkClient : MonoBehaviour
 
             move.Initialize(state.PlayerId, state.PlayerId == myPlayerId);
             Debug.Log("[Spawn] PlayerMove initialized - ID: " + state.PlayerId + ", Local: " + (state.PlayerId == myPlayerId));
+
+            // ★ 추가: 원격 플레이어면 RemotePlayerController 추가
+            if (state.PlayerId != myPlayerId)
+            {
+                RemotePlayerController remoteController = go.GetComponent<RemotePlayerController>();
+                if (remoteController == null)
+                {
+                    remoteController = go.AddComponent<RemotePlayerController>();
+                    Debug.Log("[Spawn] Added RemotePlayerController for remote player");
+                }
+                remoteController.SetTargetPosition(worldPos);
+            }
 
             // 플레이어 ID별 고정 색상
             SpriteRenderer sr = go.GetComponent<SpriteRenderer>();
@@ -393,6 +715,33 @@ public class NetworkClient : MonoBehaviour
             isConnected = false;
         }
     }
+    public async void SendUseNeedle()
+    {
+        if (!isConnected || stream == null)
+        {
+            Debug.LogWarning("[Send] Not connected");
+            return;
+        }
+
+        try
+        {
+            var packet = new UseNeedlePacket
+            {
+                PlayerId = myPlayerId
+            };
+
+            byte[] data = PacketSerializer.Serialize(packet);
+            await stream.WriteAsync(data, 0, data.Length);
+
+            Debug.Log($"[Send] UseNeedle sent: PlayerId={myPlayerId}");
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[Send] UseNeedle failed: " + e.Message);
+            isConnected = false;
+        }
+    }
+
     void OnApplicationQuit()
     {
         isConnected = false;
@@ -430,4 +779,6 @@ public class UnityMainThreadDispatcher : MonoBehaviour
         lock (_executionQueue)
             _executionQueue.Enqueue(action);
     }
+
+
 }

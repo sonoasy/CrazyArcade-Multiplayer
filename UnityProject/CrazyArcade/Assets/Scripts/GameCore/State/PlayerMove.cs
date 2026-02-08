@@ -1,3 +1,4 @@
+using Unity.VisualScripting.Antlr3.Runtime.Misc;
 using UnityEngine;
 using UnityEngine.Tilemaps;
 
@@ -17,14 +18,31 @@ public class PlayerMove : MonoBehaviour
     private float trappedTimer = 0f;
     private float trappedDuration = 10f;
 
-    public int balloonRange = 2;
-    private int maxBalloons = 5;
-    private int placedBalloonCount = 0;
 
+
+    public int balloonRange = 2;
+    public int maxBalloons = 5;
+    private int placedBalloonCount = 0;
+    public int needleCount = 0;
     private Vector3Int currentGridPos;
     private Vector3Int balloonAtMyFeet = new Vector3Int(-9999, -9999, 0);
     private bool isOnMyBalloon = false;
     private bool hasLeftMyBalloon = false;
+
+    // ★ 여기에 추가!
+    private float lastSendTime = 0f;
+    private float sendInterval = 0.05f;  // 0.05초마다 전송
+    private Vector3Int lastSentPosition = new Vector3Int(-9999, -9999, 0);
+    public bool IsTrapped()
+    {
+        return currentState == BaseState.Trapped;
+    }
+    public void UpdateStats(PlayerStats stats)
+    {
+        balloonRange = stats.BalloonRange;
+        maxBalloons = stats.BalloonCount;
+        Debug.Log($"[Stats] Range: {balloonRange}, Count: {maxBalloons}");
+    }
 
     public void Initialize(ulong id, bool isMe)
     {
@@ -49,6 +67,8 @@ public class PlayerMove : MonoBehaviour
             transform.position = groundTilemap.GetCellCenterWorld(startCell);
             currentGridPos = startCell;
         }
+
+       
     }
 
     void Update()
@@ -61,13 +81,13 @@ public class PlayerMove : MonoBehaviour
 
         // ★ groundTilemap null 체크 추가!
         if (groundTilemap == null) return;
-
+        /*
         if (currentState == BaseState.Trapped)
         {
             trappedTimer += Time.deltaTime;
             if (trappedTimer >= trappedDuration) { Die(); return; }
         }
-
+        */
         currentGridPos = groundTilemap.WorldToCell(transform.position);
 
         if (currentState == BaseState.Normal && Input.GetKeyDown(KeyCode.Space))
@@ -76,6 +96,32 @@ public class PlayerMove : MonoBehaviour
         }
 
         HandleMovement();
+
+        // ★ 여기에 추가! 일정 간격으로 위치 전송
+        if (Time.time - lastSendTime >= sendInterval && currentGridPos != lastSentPosition)
+        {
+            NetworkClient.Instance.SendMyMove(new Int2(currentGridPos.x, currentGridPos.y));
+            lastSendTime = Time.time;
+            lastSentPosition = currentGridPos;
+        }
+
+
+        if (Input.GetKeyDown(KeyCode.Alpha1))
+        {
+            TryUseNeedle();
+        }
+    }
+    void TryUseNeedle()
+    {
+        if (needleCount <= 0) return;
+        if (!IsTrapped()) return;
+
+        NetworkClient.Instance.SendUseNeedle();
+
+        // 로컬 반응성용 (서버 패킷 오면 다시 동기화됨)
+        needleCount--;
+        if (NeedleUI.Instance != null)
+            NeedleUI.Instance.SetCount(needleCount);
     }
 
     void HandleMovement()
@@ -97,10 +143,11 @@ public class PlayerMove : MonoBehaviour
             if (CanMove(nextCell))
             {
                 transform.position = nextPos;
-                if (nextCell != currentGridPos)
-                {
-                    NetworkClient.Instance.SendMyMove(new Int2(nextCell.x, nextCell.y));
-                }
+               // ★ 이 부분 삭제!(Update에서 일괄 처리)
+            // if (nextCell != currentGridPos)
+            // {
+            //     NetworkClient.Instance.SendMyMove(new Int2(nextCell.x, nextCell.y));
+            // }
             }
         }
     }
@@ -156,9 +203,10 @@ public class PlayerMove : MonoBehaviour
         }
     }
 
-    private void Die()
+    public void Die()
     {
         currentState = BaseState.Dead;
         GetComponent<SpriteRenderer>().color = Color.gray;
+        Debug.Log($"[PlayerMove] I'm dead, can't move anymore");
     }
 }

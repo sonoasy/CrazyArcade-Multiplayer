@@ -6,48 +6,72 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using System.IO;
+using System.Text.Json;
 using static NetworkPacket;
 
 class Server_Program
 {
     private static ConcurrentDictionary<ulong, ClientConnection> clients = new();
     private static ulong nextPlayerId = 1;
-
-    // ★ 추가: 게임 상태 관리
     private static bool gameStarted = false;
-    private static int maxPlayers = 2;  // 최대 2명
-
+    private static int maxPlayers = 2;
     private static ConcurrentDictionary<string, BalloonInfo> activeBalloons = new();
+
+    // ★ 맵 데이터
+    private static HashSet<string> wallTiles = new();
+    private static HashSet<string> blockTiles = new();
+    private static Random random = new Random();
+
+    // ★ 게임 타이머 (180초 = 3분)
+    private static float gameTime = 180f;
+    private static bool gameEnded = false;
 
     static async Task Main(string[] args)
     {
+
+        LoadMap();  // ★ 여기에 추가
         TcpListener server = new TcpListener(IPAddress.Any, 12345);
         server.Start();
         Console.WriteLine("크레이지 아케이드 서버 시작! 포트 12345");
         Console.WriteLine($"최대 플레이어: {maxPlayers}명");
 
+        // ★ 게임 타이머 시작
+        _ = Task.Run(GameLoop);
+
         while (true)
         {
             TcpClient client = await server.AcceptTcpClientAsync();
 
-            // ★ 추가: 게임 진행 중이거나 인원 꽉 찼으면 거부
             if (gameStarted || clients.Count >= maxPlayers)
             {
-                Console.WriteLine($"[거부] 게임 진행 중이거나 인원 초과 (현재: {clients.Count}/{maxPlayers})");
+                Console.WriteLine($"[거부] 게임 진행 중이거나 인원 초과");
                 client.Close();
                 continue;
             }
 
             ulong playerId = nextPlayerId++;
-            Console.WriteLine($"[접속] 플레이어 {playerId} (현재 인원: {clients.Count + 1}/{maxPlayers})");
+            Console.WriteLine($"[접속] 플레이어 {playerId}");
 
             var connection = new ClientConnection(playerId, client);
+            //임시
+            connection.PlayerState = new PlayerState
+            {
+                PlayerId = playerId,
+                GridPos = new Int2(0, 0), // 임시값
+                MoveState = PlayerMoveState.Idle,
+                BaseState = BaseState.Normal,
+                Stats = new PlayerStats()
+            };
+
+
             clients.TryAdd(playerId, connection);
 
-            // ★ 추가: 2명 모이면 게임 시작
             if (clients.Count == maxPlayers)
             {
                 gameStarted = true;
+                gameTime = 180f;  // 타이머 리셋
+                gameEnded = false;
                 Console.WriteLine("[게임 시작!] 모든 플레이어 접속 완료");
             }
 
@@ -55,11 +79,327 @@ class Server_Program
         }
     }
 
+    // ★ 게임 루프 (타이머 관리)
+    static async Task GameLoop()
+    {
+        while (true)
+        {
+            await Task.Delay(1000);  // 1초마다
+
+            if (gameStarted && !gameEnded)
+            {
+                float deltaTime = 1f;
+                gameTime -= 1f;
+
+                // 타이머 동기화 (1초마다)
+                var timerPacket = new GameTimerPacket
+                {
+                    RemainingTime = gameTime
+                };
+                await BroadcastPacket(timerPacket);
+
+                Console.WriteLine($"[타이머] 남은 시간: {(int)gameTime}초");
+                // ★ 추가: 갇힌 플레이어 타이머
+                foreach (var client in clients.Values)
+                {
+                    if (client.IsTrapped && !client.IsDead)
+                    {
+                        client.TrappedTimer += deltaTime;
+
+                        if (client.TrappedTimer >= client.TrappedDuration)
+                        {
+                            await KillPlayer(client.PlayerId);
+                            Console.WriteLine($"[죽음] 플레이어 {client.PlayerId} 시간 초과!");
+                        }
+                    }
+                }
+
+                // ★ 추가: 충돌 체크
+                await CheckCollision();
+                // 시간 종료
+                if (gameTime <= 0)
+                {
+                    await HandleTimeOut();
+                }
+            }
+        }
+    }
+    // ★ 충돌 체크
+    static async Task CheckCollision()
+    {
+        foreach (var trapped in clients.Values.Where(c => c.IsTrapped && !c.IsDead))
+        {
+            foreach (var other in clients.Values.Where(c => c.PlayerId != trapped.PlayerId && !c.IsDead && !c.IsTrapped))
+            {
+                // 같은 위치에 있으면
+                if (trapped.PlayerState.GridPos.X == other.PlayerState.GridPos.X &&
+                    trapped.PlayerState.GridPos.Y == other.PlayerState.GridPos.Y)
+                {
+                    // 1vs1이므로 무조건 다른 팀 = 죽음
+                    await KillPlayer(trapped.PlayerId);
+                    Console.WriteLine($"[킬!] 플레이어 {other.PlayerId}가 플레이어 {trapped.PlayerId}를 처치!");
+                }
+            }
+        }
+    }
+    // ★ 플레이어 죽음
+    static async Task KillPlayer(ulong victimId)
+    {
+        if (!clients.TryGetValue(victimId, out var victim))
+            return;
+
+        victim.IsDead = true;
+        victim.IsTrapped = false;
+        victim.PlayerState.BaseState = BaseState.Dead;
+
+        var diePacket = new PlayerDiePacket
+        {
+            PlayerId = victimId
+        };
+        await BroadcastPacket(diePacket);
+
+        await CheckGameOver();
+    }
+    // ★ 시간 종료 처리
+    static async Task HandleTimeOut()
+    {
+        gameEnded = true;
+
+        // 생존자 확인
+        var alivePlayers = clients.Values.Where(c => !c.IsDead).ToList();
+
+        if (alivePlayers.Count == 1)
+        {
+            var winner = alivePlayers[0];
+            var gameOverPacket = new GameOverPacket
+            {
+                WinnerPlayerId = winner.PlayerId,
+                Reason = "timeout"
+            };
+            await BroadcastPacket(gameOverPacket);
+            Console.WriteLine($"[게임 종료] 시간 종료 - 플레이어 {winner.PlayerId} 승리!");
+        }
+        else if (alivePlayers.Count > 1)
+        {
+            // 무승부
+            var gameOverPacket = new GameOverPacket
+            {
+                WinnerPlayerId = 0,
+                Reason = "draw"
+            };
+            await BroadcastPacket(gameOverPacket);
+            Console.WriteLine($"[게임 종료] 시간 종료 - 무승부!");
+        }
+    }
+    private static ConcurrentDictionary<string, ItemInfo> activeItems = new();
+    private static int nextItemId = 1;
+    // ★ JSON 구조
+    class TilePos
+    {
+        public int x { get; set; }
+        public int y { get; set; }
+    }
+
+    class MapData
+    {
+        public List<TilePos> walls { get; set; }
+        public List<TilePos> blocks { get; set; }
+    }
+
+    // ★ 맵 로드
+    static void LoadMap()
+    {
+        try
+        {
+            string json = File.ReadAllText("map.json");
+            var mapData = JsonSerializer.Deserialize<MapData>(json);
+
+            wallTiles.Clear();
+            blockTiles.Clear();
+
+            foreach (var wall in mapData.walls)
+                wallTiles.Add($"{wall.x},{wall.y}");
+
+            foreach (var block in mapData.blocks)
+                blockTiles.Add($"{block.x},{block.y}");
+
+            Console.WriteLine($"[맵] 벽 {wallTiles.Count}개, 블록 {blockTiles.Count}개 로드됨");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[오류] 맵 로드 실패: {ex.Message}");
+        }
+    }
+
+    // ★ 블록 파괴 + 아이템 드롭
+    static async Task DestroyBlock(Int2 gridPos)
+    {
+        string key = $"{gridPos.X},{gridPos.Y}";
+
+        if (blockTiles.Remove(key))
+        {
+            Console.WriteLine($"[블록] 파괴: ({gridPos.X}, {gridPos.Y})");
+
+            // ★ 클라에 블록 파괴 알림
+            var destroyPacket = new BlockDestroyPacket
+            {
+                GridPos = gridPos
+            };
+            await BroadcastPacket(destroyPacket);
+
+            // 30% 확률로 아이템 드롭
+            if (random.Next(100) < 100)
+            {
+                ItemType itemType = GetRandomItemType();
+                await SpawnItem(gridPos, itemType);
+            }
+        }
+    }
+
+    // ★ 랜덤 아이템 타입
+    static ItemType GetRandomItemType()
+    {
+        int roll = random.Next(100);
+
+        if (roll < 22) return ItemType.Balloon;
+        else if (roll < 44) return ItemType.Potion;
+        else if (roll < 62) return ItemType.Roller;
+        else if (roll < 72) return ItemType.Needle;
+        else if (roll < 82) return ItemType.Kick;
+        else if (roll < 90) return ItemType.Glove;
+        else return ItemType.Shark;
+    }
+    // ★ 아이템 정보 클래스 (BalloonInfo 근처에)
+    class ItemInfo
+    {
+        public string ItemId { get; set; }
+        public ItemType ItemType { get; set; }
+        public Int2 GridPos { get; set; }
+    }
+
+    // ★ 아이템 스폰 (GameLoop이나 블록 파괴 시 호출)
+    static async Task SpawnItem(Int2 gridPos, ItemType itemType)
+    {
+        string itemId = $"item_{nextItemId++}";
+
+        var itemInfo = new ItemInfo
+        {
+            ItemId = itemId,
+            ItemType = itemType,
+            GridPos = gridPos
+        };
+
+        activeItems.TryAdd(itemId, itemInfo);
+
+        var spawnPacket = new ItemSpawnPacket
+        {
+            ItemId = itemId,
+            ItemType = itemType,
+            GridPos = gridPos
+        };
+
+        await BroadcastPacket(spawnPacket);
+        Console.WriteLine($"[아이템] {itemType} 스폰: ({gridPos.X}, {gridPos.Y})");
+    }
+
+    // ★ 아이템 획득 체크 (플레이어 이동 시 호출)
+    static async Task CheckItemPickup(ClientConnection connection)
+    {
+        var playerPos = connection.PlayerState.GridPos;
+
+        foreach (var item in activeItems.Values.ToList())
+        {
+            if (item.GridPos.X == playerPos.X && item.GridPos.Y == playerPos.Y)
+            {
+                // 아이템 제거
+                if (!activeItems.TryRemove(item.ItemId, out _)) continue;
+
+                // 효과 적용
+                ApplyItemEffect(connection, item.ItemType);
+
+                // 획득 패킷 전송
+                var pickupPacket = new ItemPickupPacket
+                {
+                    ItemId = item.ItemId,
+                    PlayerId = connection.PlayerId,
+                    ItemType = item.ItemType
+                };
+
+                await BroadcastPacket(pickupPacket);
+                Console.WriteLine($"[아이템] 플레이어 {connection.PlayerId}가 {item.ItemType} 획득!");
+            }
+        }
+    }
+
+    // ★ 아이템 효과 적용
+    static void ApplyItemEffect(ClientConnection connection, ItemType itemType)
+    {
+        var stats = connection.PlayerState.Stats;
+
+        switch (itemType)
+        {
+            case ItemType.Balloon:
+                if (stats.BalloonCount < 15)
+                    stats.BalloonCount++;
+                break;
+
+            case ItemType.Potion:
+                if (stats.BalloonRange < 10)  // 맵 크기에 맞게 조절
+                    stats.BalloonRange++;
+                break;
+
+            case ItemType.Roller:
+                if (stats.MoveCostTick > 1)
+                    stats.MoveCostTick = Math.Max(1, stats.MoveCostTick - 1);  // 틱 감소 = 속도 증가
+                break;
+
+            case ItemType.Needle:
+                connection.PlayerState.Stats.NeedleCount++;
+                stats.HasNeedle = true;
+                break;
+
+            case ItemType.Kick:
+                stats.HasKick = true;
+                break;
+
+            case ItemType.Glove:
+                stats.HasGlove = true;
+                break;
+
+            case ItemType.Shark:
+                stats.IsRidingShark = true;
+                connection.PlayerState.BaseState = BaseState.Riding;
+                break;
+        }
+    }
+    // ★ 승패 판정
+    static async Task CheckGameOver()
+    {
+        if (gameEnded) return;
+
+        var alivePlayers = clients.Values.Where(c => !c.IsDead).ToList();
+
+        if (alivePlayers.Count == 1)
+        {
+            gameEnded = true;
+            var winner = alivePlayers[0];
+
+            var gameOverPacket = new GameOverPacket
+            {
+                WinnerPlayerId = winner.PlayerId,
+                Reason = "killed"
+            };
+
+            await BroadcastPacket(gameOverPacket);
+            Console.WriteLine($"[게임 종료] 플레이어 {winner.PlayerId} 승리!");
+        }
+    }
+
     static async Task HandleClient(ClientConnection connection)
     {
         try
         {
-            await SendGameState(connection);
+            //await SendGameState(connection);
 
             byte[] buffer = new byte[4096];
             while (connection.IsConnected)
@@ -90,12 +430,15 @@ class Server_Program
             };
             await BroadcastPacket(disconnectPacket, connection.PlayerId);
 
-            // ★ 추가: 모든 플레이어 퇴장 시 게임 리셋
             if (clients.Count == 0)
             {
-                Console.WriteLine("[초기화] 모든 플레이어 퇴장 - 게임 리셋, ID 초기화");
+                Console.WriteLine("[초기화] 모든 플레이어 퇴장 - 게임 리셋");
                 gameStarted = false;
-                nextPlayerId = 1;  // ID를 1로 초기화!
+                gameEnded = false;
+                nextPlayerId = 1;
+                gameTime = 180f;
+                LoadMap();           // ★ 추가
+                activeItems.Clear(); // ★ 추가
             }
         }
     }
@@ -114,6 +457,19 @@ class Server_Program
                 case PacketType.PlaceBalloon:
                     await HandlePlaceBalloon(connection, data);
                     break;
+                case PacketType.Join:
+                {
+                       var packet = PacketSerializer.Deserialize<JoinPacket>(data);
+                        connection.Nickname = packet.Nickname;
+                        connection.PlayerState.Nickname = packet.Nickname;//  널 조심 
+                        Console.WriteLine($"[JOIN] 플레이어 {connection.PlayerId} 닉네임: {packet.Nickname}");
+                        await SendGameState(connection);
+
+                        break;
+                }
+                case PacketType.UseNeedle:
+                    await HandleUseNeedle(connection, data);
+                    break;
                 default:
                     Console.WriteLine($"[경고] 알 수 없는 패킷 타입: {type}");
                     break;
@@ -124,23 +480,21 @@ class Server_Program
             Console.WriteLine($"[오류] 패킷 처리 실패: {ex.Message}");
         }
     }
-
+    /*
     static async Task HandlePlayerMove(ClientConnection connection, byte[] data)
     {
-        string json = Encoding.UTF8.GetString(data);
-        Console.WriteLine($"[디버그] 받은 JSON: {json}");
-
         var movePacket = PacketSerializer.Deserialize<PlayerMovePacket>(data);
 
-        Console.WriteLine($"[디버그] PlayerId: {movePacket.PlayerId}");
-        Console.WriteLine($"[디버그] TargetGridPos.X: {movePacket.TargetGridPos.X}");
-        Console.WriteLine($"[디버그] TargetGridPos.Y: {movePacket.TargetGridPos.Y}");
-
-        Console.WriteLine($"[이동] 플레이어 {movePacket.PlayerId}: ({movePacket.TargetGridPos.X}, {movePacket.TargetGridPos.Y})");
+        // ★ 죽은 플레이어는 이동 못함
+        // ★ 죽었거나 갇히면 이동 못함
+        if (connection.IsDead || connection.IsTrapped) return;
 
         connection.PlayerState.GridPos = movePacket.TargetGridPos;
         connection.PlayerState.TargetGridPos = null;
         connection.PlayerState.MoveState = PlayerMoveState.Idle;
+
+        // ★ 아이템 획득 체크 추가
+        await CheckItemPickup(connection);
 
         var statePacket = new PlayerStatePacket
         {
@@ -149,15 +503,72 @@ class Server_Program
 
         await BroadcastPacket(statePacket);
     }
+    */
+    static async Task HandleUseNeedle(ClientConnection connection, byte[] data)
+    {
+        var packet = PacketSerializer.Deserialize<UseNeedlePacket>(data);
+
+        // 1) 요청자가 본인인지 체크 (치트 방지)
+        if (packet.PlayerId != connection.PlayerId)
+        {
+            Console.WriteLine($"[Needle] Invalid request: packet {packet.PlayerId} != conn {connection.PlayerId}");
+            return;
+        }
+
+        // 2) 현재 상태 체크
+        if (connection.IsDead) return;
+        if (!connection.IsTrapped) return;
+
+        // 3) 바늘 보유 체크 (서버 권한)
+        var stats = connection.PlayerState?.Stats;
+        if (stats == null) return;
+
+        // 너는 Stats에 NeedleCount를 쓰고 있으니까 이거 기준
+        if (stats.NeedleCount <= 0)
+        {
+            Console.WriteLine($"[Needle] Player {connection.PlayerId} has no needle");
+            return;
+        }
+
+        // 4) 서버에서 감소 + 갇힘 해제
+        stats.NeedleCount--;
+        connection.IsTrapped = false;
+        connection.TrappedTimer = 0f;
+        connection.PlayerState.BaseState = BaseState.Normal;
+
+        Console.WriteLine($"[Needle] Player {connection.PlayerId} used needle. remain={stats.NeedleCount}");
+
+        // 5) 브로드캐스트 (모두에게 "누가 풀려났다" 알림)
+        var rescuedPacket = new PlayerRescuedPacket
+        {
+            PlayerId = connection.PlayerId,
+            RescuerId = connection.PlayerId
+        };
+        await BroadcastPacket(rescuedPacket);
+
+        // (선택) 상태 패킷도 보내서 BaseState 동기화 확실히 하고 싶으면
+        var statePacket = new PlayerStatePacket
+        {
+            Player = connection.PlayerState
+        };
+        await BroadcastPacket(statePacket);
+    }
+
 
     static async Task SendGameState(ClientConnection connection)
     {
+        if (connection.PlayerState == null)
+        {
+            Console.WriteLine($"[경고] PlayerState가 null이라 GameState 전송 스킵: {connection.PlayerId}");
+            return;
+        }
+
         Int2[] spawnPositions = new Int2[]
         {
-            new Int2(-6, -5),   // 플레이어 1
-            new Int2(-4, -5),   // 플레이어 2
-            new Int2(-6, -3),   // 플레이어 3
-            new Int2(-4, -3)    // 플레이어 4
+            new Int2(-6, -5),
+            new Int2(-4, -5),
+            new Int2(-6, -3),
+            new Int2(-4, -3)
         };
 
         int spawnIndex = ((int)(connection.PlayerId - 1)) % spawnPositions.Length;
@@ -165,6 +576,7 @@ class Server_Program
         connection.PlayerState = new PlayerState
         {
             PlayerId = connection.PlayerId,
+            Nickname = connection.Nickname,
             GridPos = spawnPositions[spawnIndex],
             MoveState = PlayerMoveState.Idle,
             BaseState = BaseState.Normal,
@@ -174,19 +586,6 @@ class Server_Program
         Console.WriteLine($"[상태] 플레이어 {connection.PlayerId}의 시작 위치: ({connection.PlayerState.GridPos.X}, {connection.PlayerState.GridPos.Y})");
 
         var allPlayers = clients.Values.Select(c => c.PlayerState).ToArray();
-        Console.WriteLine($"[디버그] 전송할 플레이어 수: {allPlayers.Length}");
-
-        foreach (var p in allPlayers)
-        {
-            if (p == null)
-            {
-                Console.WriteLine($"[경고] PlayerState가 null인 클라이언트 발견!");
-            }
-            else
-            {
-                Console.WriteLine($"[디버그] 플레이어 {p.PlayerId} 포함 - 위치: ({p.GridPos.X}, {p.GridPos.Y})");
-            }
-        }
 
         var gameStatePacket = new GameStatePacket
         {
@@ -195,8 +594,6 @@ class Server_Program
         };
 
         byte[] data = PacketSerializer.Serialize(gameStatePacket);
-        Console.WriteLine($"[디버그] 직렬화된 데이터 크기: {data.Length} bytes");
-
         await connection.Stream.WriteAsync(data, 0, data.Length);
 
         Console.WriteLine($"[전송] 플레이어 {connection.PlayerId}에게 게임 상태 전송");
@@ -223,14 +620,13 @@ class Server_Program
 
         await Task.WhenAll(tasks);
     }
-    // ★ 물풍선 설치 처리
+
     static async Task HandlePlaceBalloon(ClientConnection connection, byte[] data)
     {
         var packet = PacketSerializer.Deserialize<PlaceBalloonPacket>(data);
 
         string key = $"{packet.GridPos.X},{packet.GridPos.Y}";
 
-        // 이미 물풍선이 있으면 무시
         if (activeBalloons.ContainsKey(key))
         {
             Console.WriteLine($"[물풍선] 위치 ({packet.GridPos.X}, {packet.GridPos.Y})에 이미 존재");
@@ -239,7 +635,6 @@ class Server_Program
 
         Console.WriteLine($"[물풍선] 플레이어 {packet.PlayerId}가 ({packet.GridPos.X}, {packet.GridPos.Y})에 설치, 범위: {packet.Range}");
 
-        // 물풍선 정보 저장
         var balloonInfo = new BalloonInfo
         {
             GridPos = packet.GridPos,
@@ -249,10 +644,8 @@ class Server_Program
 
         activeBalloons.TryAdd(key, balloonInfo);
 
-        // 모든 클라이언트에게 브로드캐스트
         await BroadcastPacket(packet);
 
-        // 3초 후 폭발 예약
         _ = Task.Run(async () =>
         {
             await Task.Delay(3000);
@@ -260,33 +653,74 @@ class Server_Program
         });
     }
 
-    // ★ 물풍선 폭발 처리
+    // ★ 물풍선 폭발 처리 - 플레이어 죽음 체크 추가
     static async Task ExplodeBalloon(Int2 gridPos, int range)
     {
         string key = $"{gridPos.X},{gridPos.Y}";
 
         if (!activeBalloons.TryRemove(key, out _))
         {
-            Console.WriteLine($"[폭발] 물풍선이 이미 제거됨: ({gridPos.X}, {gridPos.Y})");
             return;
         }
 
         Console.WriteLine($"[폭발] 물풍선 폭발: ({gridPos.X}, {gridPos.Y}), 범위: {range}");
 
-        // 폭발 범위 계산 (4방향)
         var affectedCells = new List<Int2>();
-        affectedCells.Add(gridPos); // 중심
+        affectedCells.Add(gridPos);
 
-        // 상하좌우로 range만큼
-        for (int i = 1; i <= range; i++)
+        // ★ 4방향 물줄기 (벽/블록에서 멈춤)
+        Int2[] directions = { new Int2(1, 0), new Int2(-1, 0), new Int2(0, 1), new Int2(0, -1) };
+
+        foreach (var dir in directions)
         {
-            affectedCells.Add(new Int2(gridPos.X + i, gridPos.Y)); // 우
-            affectedCells.Add(new Int2(gridPos.X - i, gridPos.Y)); // 좌
-            affectedCells.Add(new Int2(gridPos.X, gridPos.Y + i)); // 상
-            affectedCells.Add(new Int2(gridPos.X, gridPos.Y - i)); // 하
+            for (int i = 1; i <= range; i++)
+            {
+                Int2 cell = new Int2(gridPos.X + dir.X * i, gridPos.Y + dir.Y * i);
+                string cellKey = $"{cell.X},{cell.Y}";
+
+                // 벽이면 멈춤
+                if (wallTiles.Contains(cellKey))
+                    break;
+
+                // 블록이면 파괴하고 멈춤
+                if (blockTiles.Contains(cellKey))
+                {
+                    affectedCells.Add(cell);
+                    await DestroyBlock(cell);
+                    break;
+                }
+
+                affectedCells.Add(cell);
+            }
         }
 
-        // 폭발 패킷 전송
+        // ★ 폭발 범위에 있는 플레이어 갇힘 처리
+        foreach (var client in clients.Values)
+        {
+            if (client.IsDead || client.IsTrapped) continue;
+
+            var playerPos = client.PlayerState.GridPos;
+
+            foreach (var cell in affectedCells)
+            {
+                if (cell.X == playerPos.X && cell.Y == playerPos.Y)
+                {
+                    client.IsTrapped = true;
+                    client.TrappedTimer = 0f;
+                    client.PlayerState.BaseState = BaseState.Trapped;
+
+                    var trapPacket = new PlayerTrappedPacket
+                    {
+                        PlayerId = client.PlayerId
+                    };
+
+                    await BroadcastPacket(trapPacket);
+                    Console.WriteLine($"[갇힘] 플레이어 {client.PlayerId} 물풍선에 갇힘!");
+                    break;
+                }
+            }
+        }
+
         var explodePacket = new BalloonExplodePacket
         {
             GridPos = gridPos,
@@ -296,7 +730,6 @@ class Server_Program
         await BroadcastPacket(explodePacket);
     }
 
-    // ★ 물풍선 정보 클래스
     class BalloonInfo
     {
         public Int2 GridPos { get; set; }
@@ -308,16 +741,26 @@ class Server_Program
 class ClientConnection
 {
     public ulong PlayerId { get; }
+    public string Nickname { get; set; }   // ⭐ 추가
     public TcpClient Client { get; }
     public NetworkStream Stream { get; }
     public PlayerState PlayerState { get; set; }
     public bool IsConnected => Client.Connected;
+
+    // ★ 추가
+    // ★ 상태 필드 추가
+    public bool IsDead { get; set; } = false;
+    public bool IsTrapped { get; set; } = false;
+    public float TrappedTimer { get; set; } = 0f;
+    public float TrappedDuration { get; set; } = 30f;
 
     public ClientConnection(ulong playerId, TcpClient client)
     {
         PlayerId = playerId;
         Client = client;
         Stream = client.GetStream();
+
+
     }
 
     public async Task SendPacketAsync(byte[] data)
@@ -344,5 +787,4 @@ class ClientConnection
         }
         catch { }
     }
-    
 }

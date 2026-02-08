@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CrazyArcade.Server")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+60a177ed4a13fd7ff36563a73c1a53b9e2be265e")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+db521e1aec78c42e9bef21e42f11026466ee26c7")]
 [assembly: System.Reflection.AssemblyProductAttribute("CrazyArcade.Server")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CrazyArcade.Server")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
