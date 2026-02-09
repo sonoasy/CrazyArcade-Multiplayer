@@ -149,7 +149,15 @@ public class NetworkClient : MonoBehaviour
         isConnected = false;
         Debug.Log("[Receive] Loop ended");
     }
-
+    public PlayerStats GetMyPlayerStats()
+    {
+        if (allPlayers.TryGetValue(myPlayerId, out var go))
+        {
+            var move = go.GetComponent<PlayerMove>();
+            return move?.CurrentStats;
+        }
+        return null;
+    }
     void ProcessPacket(byte[] data)
     {
         try
@@ -224,10 +232,34 @@ public class NetworkClient : MonoBehaviour
                         
 
                         PlayerMove move = go.GetComponent<PlayerMove>();
-                            if (move != null && packet.Player.Stats != null)
+                        if (move != null)
+                        {
+                            // ✅ 스탯은 "내 플레이어만"
+                            if (packet.Player.PlayerId == myPlayerId && packet.Player.Stats != null)
                             {
                                 move.UpdateStats(packet.Player.Stats);
+                                // ⭐ 바늘 UI 여기서만 갱신
+                                if (NeedleUI.Instance != null)
+                                {
+                                    NeedleUI.Instance.SetCount(packet.Player.Stats.NeedleCount);
+                                }
                             }
+
+                            // ✅ 상태(BaseState)는 "모든 플레이어"
+                            if (packet.Player.BaseState == BaseState.Trapped)
+                            {
+                                move.GetTrapped();
+                            }
+                            else if (packet.Player.BaseState == BaseState.Normal)
+                            {
+                                move.Rescue();
+                            }
+                            else if (packet.Player.BaseState == BaseState.Dead)
+                            {
+                                move.Die();
+                            }
+                        
+                        }
 
                         }
 
@@ -371,6 +403,8 @@ public class NetworkClient : MonoBehaviour
                 {
                     ItemManager.Instance.RemoveItem(packet.ItemId);
                 }
+                Debug.Log($"[Item] Player {packet.PlayerId} picked up {packet.ItemType}");
+                /*
                 // ★ 내가 먹은 거면 스탯 업데이트
                 if (packet.PlayerId == myPlayerId)
                 {
@@ -410,6 +444,17 @@ public class NetworkClient : MonoBehaviour
                     }
 
                 }
+                */
+                /*
+                //var packet = PacketSerializer.Deserialize<ItemPickupPacket>(data);
+
+                // 아이템 오브젝트만 제거
+                if (ItemManager.Instance != null)
+                {
+                    ItemManager.Instance.RemoveItem(packet.ItemId);
+                }
+
+                Debug.Log($"[Item] Player {packet.PlayerId} picked up {packet.ItemType}"); */
             }
             else if (type == PacketType.GameTimer)
             {
@@ -501,7 +546,7 @@ public class NetworkClient : MonoBehaviour
                         PlayerMove move = me.GetComponent<PlayerMove>();
                         if (move != null && NeedleUI.Instance != null)
                         {
-                            NeedleUI.Instance.SetCount(move.needleCount);
+                            NeedleUI.Instance.SetCount(move.CurrentStats.NeedleCount);
                         }
                     }
                 }
@@ -717,6 +762,7 @@ public class NetworkClient : MonoBehaviour
     }
     public async void SendUseNeedle()
     {
+        Debug.Log("[Send] SendUseNeedle CALLED");
         if (!isConnected || stream == null)
         {
             Debug.LogWarning("[Send] Not connected");
@@ -732,7 +778,7 @@ public class NetworkClient : MonoBehaviour
 
             byte[] data = PacketSerializer.Serialize(packet);
             await stream.WriteAsync(data, 0, data.Length);
-
+            
             Debug.Log($"[Send] UseNeedle sent: PlayerId={myPlayerId}");
         }
         catch (Exception e)

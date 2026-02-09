@@ -20,7 +20,7 @@ public class PlayerStats
     public int BalloonCount = 1;      // 설치 가능 풍선 개수
     public int BalloonRange = 1;      // 물줄기 길이
     public bool CanSwim = false;      // 물 타일 이동 가능 여부
-                                      // ★ 아이템 효과 추가
+    public int NeedleCount = 0;                                  // ★ 아이템 효과 추가
     public bool HasKick = false;       // 발차기
     public bool HasGlove = false;      // 장갑
     public bool HasNeedle = false;     // 바늘

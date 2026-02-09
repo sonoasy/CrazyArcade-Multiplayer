@@ -9,7 +9,7 @@ public class PlayerMove : MonoBehaviour
     public Tilemap wallTilemap;
     public Tilemap objectTilemap;
     public WaterBalloonManager balloonManager;
-
+    public PlayerStats CurrentStats { get; private set; }
     public bool isLocalPlayer = false;
     public ulong playerId;
 
@@ -17,13 +17,13 @@ public class PlayerMove : MonoBehaviour
     private float trappedMoveSpeed = 0.5f;
     private float trappedTimer = 0f;
     private float trappedDuration = 10f;
-
+    private Color originalColor;
 
 
     public int balloonRange = 2;
     public int maxBalloons = 5;
     private int placedBalloonCount = 0;
-    public int needleCount = 0;
+    //public int needleCount = 0;
     private Vector3Int currentGridPos;
     private Vector3Int balloonAtMyFeet = new Vector3Int(-9999, -9999, 0);
     private bool isOnMyBalloon = false;
@@ -39,6 +39,7 @@ public class PlayerMove : MonoBehaviour
     }
     public void UpdateStats(PlayerStats stats)
     {
+        CurrentStats = stats; // ★ 핵심
         balloonRange = stats.BalloonRange;
         maxBalloons = stats.BalloonCount;
         Debug.Log($"[Stats] Range: {balloonRange}, Count: {maxBalloons}");
@@ -54,7 +55,8 @@ public class PlayerMove : MonoBehaviour
         if (wallTilemap == null) wallTilemap = GameObject.Find("WallTilemap")?.GetComponent<Tilemap>();
         if (objectTilemap == null) objectTilemap = GameObject.Find("ObjectTilemap")?.GetComponent<Tilemap>();
         if (balloonManager == null) balloonManager = FindObjectOfType<WaterBalloonManager>();
-
+        SpriteRenderer sr = GetComponent<SpriteRenderer>();
+        originalColor = sr.color;
         // ★ 디버그 로그 추가
         Debug.Log($"[PlayerMove] groundTilemap 찾음? {groundTilemap != null}");
     }
@@ -108,20 +110,29 @@ public class PlayerMove : MonoBehaviour
 
         if (Input.GetKeyDown(KeyCode.Alpha1))
         {
+            Debug.Log("[Needle] 1 key pressed");
             TryUseNeedle();
         }
     }
     void TryUseNeedle()
     {
-        if (needleCount <= 0) return;
+        var stats = NetworkClient.Instance
+        ?.GetMyPlayerStats(); // 아래에서 추가할 함수
+
+        Debug.Log($"[Needle] Try | statsNeedle={stats?.NeedleCount}, trapped={IsTrapped()}");
+
+        if (stats == null) return;
+        if (stats.NeedleCount <= 0) return;
         if (!IsTrapped()) return;
 
         NetworkClient.Instance.SendUseNeedle();
 
+        /*
         // 로컬 반응성용 (서버 패킷 오면 다시 동기화됨)
         needleCount--;
         if (NeedleUI.Instance != null)
             NeedleUI.Instance.SetCount(needleCount);
+    */
     }
 
     void HandleMovement()
@@ -188,6 +199,7 @@ public class PlayerMove : MonoBehaviour
     {
         if (currentState == BaseState.Normal)
         {
+            Debug.Log($"[PlayerMove] GetTrapped CALLED | before={currentState}");
             currentState = BaseState.Trapped;
             trappedTimer = 0f;
             GetComponent<SpriteRenderer>().color = Color.cyan;
@@ -198,8 +210,9 @@ public class PlayerMove : MonoBehaviour
     {
         if (currentState == BaseState.Trapped)
         {
+            Debug.Log($"[PlayerMove] Rescue CALLED | before={currentState}");
             currentState = BaseState.Normal;
-            GetComponent<SpriteRenderer>().color = Color.white;
+            GetComponent<SpriteRenderer>().color = originalColor;
         }
     }
 
