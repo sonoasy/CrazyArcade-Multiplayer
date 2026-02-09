@@ -223,13 +223,13 @@ public class NetworkClient : MonoBehaviour
                 var p = packet.Player;
                 if (allPlayers.TryGetValue(packet.Player.PlayerId, out GameObject go))
                 {
-                   // if (packet.Player.PlayerId != myPlayerId)
-                   // {
+                    // if (packet.Player.PlayerId != myPlayerId)
+                    // {
 
-                        // ★ 내 플레이어면 스탯 업데이트
-                        if (packet.Player.PlayerId == myPlayerId)
-                        {
-                        
+                    // ★ 내 플레이어면 스탯 업데이트
+                    if (packet.Player.PlayerId == myPlayerId)
+                    {
+
 
                         PlayerMove move = go.GetComponent<PlayerMove>();
                         if (move != null)
@@ -258,37 +258,37 @@ public class NetworkClient : MonoBehaviour
                             {
                                 move.Die();
                             }
-                        
-                        }
 
                         }
 
+                    }
 
-                        Vector3Int gridPos = new Vector3Int(packet.Player.GridPos.X, packet.Player.GridPos.Y, 0);
-                        Vector3 targetPos;  // ★ 추가
 
-                        if (groundTilemap != null)
-                        {
-                            //go.transform.position
-                            targetPos = groundTilemap.GetCellCenterWorld(gridPos);
-                        }
-                        else
-                        {
-                            //go.transform.position =
-                            targetPos = new Vector3(packet.Player.GridPos.X, packet.Player.GridPos.Y, 0);
-                        }
-                        // Debug.Log("[Process] Updated player " + packet.Player.PlayerId + " position");
-                        RemotePlayerController remoteController = go.GetComponent<RemotePlayerController>();
-                        if (remoteController != null)
-                        {
-                            remoteController.SetTargetPosition(targetPos);
-                            Debug.Log($"[Process] Smooth move to {targetPos}");
-                        }
-                        else
-                        {
-                            go.transform.position = targetPos;
-                            Debug.LogWarning("[Process] No RemotePlayerController, instant move");
-                        }
+                    Vector3Int gridPos = new Vector3Int(packet.Player.GridPos.X, packet.Player.GridPos.Y, 0);
+                    Vector3 targetPos;  // ★ 추가
+
+                    if (groundTilemap != null)
+                    {
+                        //go.transform.position
+                        targetPos = groundTilemap.GetCellCenterWorld(gridPos);
+                    }
+                    else
+                    {
+                        //go.transform.position =
+                        targetPos = new Vector3(packet.Player.GridPos.X, packet.Player.GridPos.Y, 0);
+                    }
+                    // Debug.Log("[Process] Updated player " + packet.Player.PlayerId + " position");
+                    RemotePlayerController remoteController = go.GetComponent<RemotePlayerController>();
+                    if (remoteController != null)
+                    {
+                        remoteController.SetTargetPosition(targetPos);
+                        Debug.Log($"[Process] Smooth move to {targetPos}");
+                    }
+                    else
+                    {
+                        go.transform.position = targetPos;
+                        Debug.LogWarning("[Process] No RemotePlayerController, instant move");
+                    }
                     //}
                 }
                 else
@@ -553,7 +553,29 @@ public class NetworkClient : MonoBehaviour
 
                 Debug.Log($"[Rescue] Player {packet.PlayerId} rescued by {packet.RescuerId}");
             }
+            else if (type == PacketType.GameStartCountdown)
+            {
+                var packet = PacketSerializer.Deserialize<GameStartCountdownPacket>(data);
 
+                Debug.Log($"[Countdown] {packet.Remaining}");
+
+                if (CountdownUI.Instance != null)
+                {
+                    CountdownUI.Instance.SetCountdown(packet.Remaining);
+                }
+            }
+
+            else if (type == PacketType.GameStart)
+            {
+                Debug.Log("[Game] START");
+
+                if (CountdownUI.Instance != null)
+                {
+                    CountdownUI.Instance.ShowGameStart();
+                }
+
+                GameStateManager.Instance.GameStarted = true;
+            }
             // ★ 게임 종료
             else if (type == PacketType.GameOver)
             {

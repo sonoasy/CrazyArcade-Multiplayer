@@ -7,6 +7,8 @@ public enum PacketType
     Connect = 1,
     Disconnect = 2,
     Join=3,   // ⭐ 추가
+    GameStartCountdown = 4,
+    GameStart=5,
     // 플레이어 이동
     PlayerMove = 10,
     PlayerState = 11,
@@ -29,6 +31,25 @@ public enum PacketType
     BlockDestroy = 60   // ★ 추가
     
 }
+// ★ 게임 시작 카운트다운 패킷
+[Serializable]
+public class GameStartCountdownPacket : NetworkPacket
+{
+    public int Remaining; // 10, 9, 8 ...
+
+    public GameStartCountdownPacket()
+        : base(PacketType.GameStartCountdown) { }
+}
+
+// ★ 게임 시작 패킷
+[Serializable]
+public class GameStartPacket : NetworkPacket
+{
+    public GameStartPacket()
+        : base(PacketType.GameStart) { }
+}
+
+
 [Serializable]
 public class JoinPacket : NetworkPacket
 {

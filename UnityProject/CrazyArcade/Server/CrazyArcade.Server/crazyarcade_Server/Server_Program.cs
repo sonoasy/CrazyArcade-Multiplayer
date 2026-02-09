@@ -12,9 +12,11 @@ using static NetworkPacket;
 
 class Server_Program
 {
+    static bool gameStarted = false;      // 실제 게임 시작 여부
+    static bool countdownRunning = false; // 카운트다운 중인지
     private static ConcurrentDictionary<ulong, ClientConnection> clients = new();
     private static ulong nextPlayerId = 1;
-    private static bool gameStarted = false;
+    
     private static int maxPlayers = 2;
     private static ConcurrentDictionary<string, BalloonInfo> activeBalloons = new();
 
@@ -89,18 +91,49 @@ class Server_Program
 
             clients.TryAdd(playerId, connection);
 
-            if (clients.Count == maxPlayers)
+
+
+            if (clients.Count == maxPlayers && !countdownRunning)
             {
-                gameStarted = true;
-                gameTime = 180f;  // 타이머 리셋
-                gameEnded = false;
+                //gameStarted = true;
+                //gameTime = 180f;  // 타이머 리셋
+                //gameEnded = false;
+                countdownRunning = true;
+                Console.WriteLine("[COUNTDOWN] Start");
+                _ = Task.Run(StartCountdown);
                 Console.WriteLine("[게임 시작!] 모든 플레이어 접속 완료");
             }
 
             _ = Task.Run(() => HandleClient(connection));
         }
     }
+    static async Task StartCountdown()
+    {
+        int count = 10;
 
+        while (count > 0)
+        {
+            var packet = new GameStartCountdownPacket
+            {
+                Remaining = count
+            };
+
+            await BroadcastPacket(packet);
+            Console.WriteLine($"[COUNTDOWN] {count}");
+
+            await Task.Delay(1000);
+            count--;
+        }
+
+        // 카운트 끝
+        countdownRunning = false;
+        gameStarted = true;
+        gameTime = 180f;
+
+        await BroadcastPacket(new GameStartPacket());
+
+        Console.WriteLine("[GAME] START!");
+    }
     // ★ 게임 루프 (타이머 관리)
     static async Task GameLoop()
     {

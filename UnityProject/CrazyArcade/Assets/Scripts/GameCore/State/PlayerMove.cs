@@ -75,6 +75,8 @@ public class PlayerMove : MonoBehaviour
 
     void Update()
     {
+        if (!GameStateManager.Instance.GameStarted)
+            return;
         // ★ 순서 중요: null 체크를 먼저!
         if (NetworkClient.Instance == null) return;
         if (!isLocalPlayer) return;  // 원격 플레이어는 입력 처리 안 함
