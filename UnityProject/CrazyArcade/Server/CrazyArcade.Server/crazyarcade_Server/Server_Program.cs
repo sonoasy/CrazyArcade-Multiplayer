@@ -17,7 +17,7 @@ class Server_Program
     private static ConcurrentDictionary<ulong, ClientConnection> clients = new();
     private static ulong nextPlayerId = 1;
     
-    private static int maxPlayers = 2;
+    private static int maxPlayers =8;
     private static ConcurrentDictionary<string, BalloonInfo> activeBalloons = new();
 
     // ★ 맵 데이터
@@ -28,9 +28,25 @@ class Server_Program
     // ★ 게임 타이머 (180초 = 3분)
     private static float gameTime = 180f;
     private static bool gameEnded = false;
+
+    private static int packetCount = 0;
+    private static DateTime lastThroughputCheck = DateTime.Now;
+    private static ConcurrentDictionary<ulong, long> pingTimestamps = new();
+
+    private static int recvPacketCount = 0;
+    private static int sendPacketCount = 0;
+
+
+
+
+
     static async Task HandlePlayerMove(ClientConnection connection, byte[] data)
     {
         var packet = PacketSerializer.Deserialize<PlayerMovePacket>(data);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        long rtt = now - packet.Timestamp;
+        Console.WriteLine($"[RTT] 플레이어 {connection.PlayerId}: {rtt}ms | 접속자: {clients.Count}명");
+
 
         // 죽었거나 갇히면 이동 무시
         if (connection.IsDead || connection.IsTrapped)
@@ -139,7 +155,17 @@ class Server_Program
     {
         while (true)
         {
+
+
             await Task.Delay(1000);  // 1초마다
+            
+            //
+            int count = Interlocked.Exchange(ref packetCount, 0);
+            //Console.WriteLine($"[THROUGHPUT] {clients.Count}명 접속 | 초당 패킷: {count}개");
+            int recv = Interlocked.Exchange(ref recvPacketCount, 0);
+            int send = Interlocked.Exchange(ref sendPacketCount, 0);
+            Console.WriteLine($"[THROUGHPUT] {clients.Count}명 | 수신: {recv}개/s | 송신: {send}개/s");
+
 
             if (gameStarted && !gameEnded)
             {
@@ -459,7 +485,7 @@ class Server_Program
         try
         {
             //await SendGameState(connection);
-
+            /*
             byte[] buffer = new byte[4096];
             while (connection.IsConnected)
             {
@@ -470,6 +496,30 @@ class Server_Program
                 Array.Copy(buffer, packetData, bytesRead);
 
                 await ProcessPacket(connection, packetData);
+            }
+            */
+            //패킷 해더 방식을 ㅗ바꿈 
+            byte[] lengthBuffer = new byte[4];
+            while (connection.IsConnected)
+            {
+                // ★ 1. 앞 4바이트 읽어서 길이 확인
+                int bytesRead = await connection.Stream.ReadAsync(lengthBuffer, 0, 4);
+                if (bytesRead == 0) break;
+
+                int packetLength = BitConverter.ToInt32(lengthBuffer, 0);
+
+                // ★ 2. 길이만큼 읽기
+                byte[] packetBuffer = new byte[packetLength];
+                int totalRead = 0;
+                while (totalRead < packetLength)
+                {
+                    int read = await connection.Stream.ReadAsync(packetBuffer, totalRead, packetLength - totalRead);
+                    if (read == 0) break;
+                    totalRead += read;
+                }
+
+                // ★ 3. 처리
+                await ProcessPacket(connection, packetBuffer);
             }
         }
         catch (Exception ex)
@@ -504,6 +554,8 @@ class Server_Program
 
     static async Task ProcessPacket(ClientConnection connection, byte[] data)
     {
+        Interlocked.Increment(ref packetCount); // ★ 추가
+        Interlocked.Increment(ref recvPacketCount); // ★ 추가
         try
         {
             PacketType type = PacketSerializer.GetPacketType(data);
@@ -537,7 +589,10 @@ class Server_Program
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[오류] 패킷 처리 실패: {ex.Message}");
+            string raw = System.Text.Encoding.UTF8.GetString(data);
+            Console.WriteLine($"[오류] 패킷 처리 실패: {ex.Message} | 데이터: {raw}");
+
+            // Console.WriteLine($"[오류] 패킷 처리 실패: {ex.Message}");
         }
     }
     /*
@@ -625,10 +680,14 @@ class Server_Program
 
         Int2[] spawnPositions = new Int2[]
         {
-            new Int2(-6, -5),
-            new Int2(-4, -5),
-            new Int2(-6, -3),
-            new Int2(-4, -3)
+           new Int2(-7, -6),  // 1팀 1번
+           new Int2(6, 3),    // 2팀 1번
+           new Int2(-7, -5),  // 1팀 2번           
+           new Int2(6, 4),    // 2팀 2번
+            new Int2(-6, -6),  // 1팀 3번
+            new Int2(7, 3),    // 2팀 3번
+           new Int2(-6, -5),  // 1팀 4번
+           new Int2(7, 4),    // 2팀 4번
         };
 
         int spawnIndex = ((int)(connection.PlayerId - 1)) % spawnPositions.Length;
@@ -654,7 +713,8 @@ class Server_Program
         };
 
         byte[] data = PacketSerializer.Serialize(gameStatePacket);
-        await connection.Stream.WriteAsync(data, 0, data.Length);
+        await connection.SendPacketAsync(data);
+        //await connection.Stream.WriteAsync(data, 0, data.Length);
 
         Console.WriteLine($"[전송] 플레이어 {connection.PlayerId}에게 게임 상태 전송");
 
@@ -674,7 +734,7 @@ class Server_Program
         {
             if (excludePlayerId.HasValue && client.PlayerId == excludePlayerId.Value)
                 continue;
-
+            Interlocked.Increment(ref sendPacketCount); // ★ 추가
             tasks.Add(client.SendPacketAsync(data));
         }
 
@@ -834,7 +894,16 @@ class ClientConnection
         {
             if (IsConnected)
             {
-                await Stream.WriteAsync(data, 0, data.Length);
+                //  byte[] len = BitConverter.GetBytes(data.Length);
+
+                // await Stream.WriteAsync(len, 0, len.Length);
+                // await Stream.WriteAsync(data, 0, data.Length);
+                //await Stream.WriteAsync(data, 0, data.Length);
+                byte[] sendBuffer = new byte[4 + data.Length];
+                BitConverter.GetBytes(data.Length).CopyTo(sendBuffer, 0);
+                data.CopyTo(sendBuffer, 4);
+
+                await Stream.WriteAsync(sendBuffer, 0, sendBuffer.Length); // 한 번에!
             }
         }
         catch (Exception ex)

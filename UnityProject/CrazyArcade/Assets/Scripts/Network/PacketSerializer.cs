@@ -16,7 +16,16 @@ public static class PacketSerializer
     public static byte[] Serialize<T>(T packet) where T : NetworkPacket
     {
         string json = JsonConvert.SerializeObject(packet, JsonSettings);
-        return Encoding.UTF8.GetBytes(json);
+        //길이 추가 -> json 연이은 문제 해결해야함 
+        byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
+
+
+        byte[] result = new byte[4 + jsonBytes.Length];
+        BitConverter.GetBytes(jsonBytes.Length).CopyTo(result, 0); // 앞 4바이트 길이
+        jsonBytes.CopyTo(result, 4); // 나머지 JSON
+        return result;
+
+        //return Encoding.UTF8.GetBytes(json);
     }
 
     // byte[] → JSON → 패킷

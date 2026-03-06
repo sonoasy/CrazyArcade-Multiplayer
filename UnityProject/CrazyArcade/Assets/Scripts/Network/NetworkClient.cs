@@ -54,7 +54,7 @@ public class NetworkClient : MonoBehaviour
         {
             Debug.Log("[Connect] Trying to connect...");
             client = new TcpClient();
-            await client.ConnectAsync("127.0.0.1", 12345);
+            await client.ConnectAsync("192.168.35.23", 12345);
             stream = client.GetStream();
             isConnected = true;
             Debug.Log("[Connect] Success!");
@@ -76,7 +76,49 @@ public class NetworkClient : MonoBehaviour
             isConnected = false;
         }
     }
+    //헤더 길이 형식으로 바꿈 
+    async Task ReceivePackets()
+    {
+        Debug.Log("[Receive] Waiting for packets...");
+        while (isConnected && client != null && client.Connected)
+        {
+            try
+            {
+                // ★ 1. 앞 4바이트 읽어서 길이 확인
+                byte[] lengthBuffer = new byte[4];
+                int bytesRead = await stream.ReadAsync(lengthBuffer, 0, 4);
+                if (bytesRead == 0) break;
 
+                int packetLength = BitConverter.ToInt32(lengthBuffer, 0);
+
+                // ★ 2. 길이만큼 읽기
+                byte[] packetBuffer = new byte[packetLength];
+                int totalRead = 0;
+                while (totalRead < packetLength)
+                {
+                    int read = await stream.ReadAsync(packetBuffer, totalRead, packetLength - totalRead);
+                    if (read == 0) break;
+                    totalRead += read;
+                }
+
+                // ★ 3. 처리
+                byte[] data = packetBuffer;
+                UnityMainThreadDispatcher.Enqueue(() =>
+                {
+                    ProcessPacket(data);
+                });
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[Receive] Error: " + e.Message);
+                break;
+            }
+        }
+
+        isConnected = false;
+        Debug.Log("[Receive] Loop ended");
+    }
+    /*
     async Task ReceivePackets()
     {
         byte[] buffer = new byte[8192];
@@ -149,6 +191,7 @@ public class NetworkClient : MonoBehaviour
         isConnected = false;
         Debug.Log("[Receive] Loop ended");
     }
+    */
     public PlayerStats GetMyPlayerStats()
     {
         if (allPlayers.TryGetValue(myPlayerId, out var go))
@@ -635,6 +678,8 @@ public class NetworkClient : MonoBehaviour
                 return;
             }
 
+            /*
+
             // 플레이어별 강제 월드 좌표
             Vector3 worldPos;
             if (state.PlayerId == 1)
@@ -657,9 +702,9 @@ public class NetworkClient : MonoBehaviour
                 worldPos = new Vector3(643, 6, 0);  // 플레이어 4: 오른쪽 하단
                 Debug.Log("[Spawn] Player 4 at: " + worldPos);
             }
-            else
-            {
-                Vector3Int gridPos = new Vector3Int(state.GridPos.X, state.GridPos.Y, 0);
+            */
+            Vector3 worldPos;
+            Vector3Int gridPos = new Vector3Int(state.GridPos.X, state.GridPos.Y, 0);
                 if (groundTilemap != null)
                 {
                     worldPos = groundTilemap.GetCellCenterWorld(gridPos);
@@ -668,7 +713,7 @@ public class NetworkClient : MonoBehaviour
                 {
                     worldPos = new Vector3(state.GridPos.X, state.GridPos.Y, 0);
                 }
-            }
+        
 
             GameObject go = Instantiate(playerPrefab, worldPos, Quaternion.identity);
             Debug.Log("[Spawn] GameObject created: " + go.name);
@@ -699,30 +744,17 @@ public class NetworkClient : MonoBehaviour
             SpriteRenderer sr = go.GetComponent<SpriteRenderer>();
             if (sr != null)
             {
-                if (state.PlayerId == 1)
+                if (state.PlayerId %2== 1)
                 {
                     sr.color = Color.red;    // 플레이어 1: 빨강
                     Debug.Log("[Spawn] Player 1 (Red)");
                 }
-                else if (state.PlayerId == 2)
+                else 
                 {
                     sr.color = Color.yellow; // 플레이어 2: 노랑
                     Debug.Log("[Spawn] Player 2 (Yellow)");
                 }
-                else if (state.PlayerId == 3)
-                {
-                    sr.color = Color.blue;   // 플레이어 3: 파랑
-                    Debug.Log("[Spawn] Player 3 (Blue)");
-                }
-                else if (state.PlayerId == 4)
-                {
-                    sr.color = Color.green;  // 플레이어 4: 초록
-                    Debug.Log("[Spawn] Player 4 (Green)");
-                }
-                else
-                {
-                    sr.color = Color.white;  // 5번째 이후: 하양
-                }
+               
             }
 
             allPlayers[state.PlayerId] = go;
