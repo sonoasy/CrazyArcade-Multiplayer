@@ -1,4 +1,5 @@
 # 🎮 Crazy Arcade Multiplayer
+🐣본 프로젝트는 크레이지아케이드를 참고하여 제작한 개인 학습 목적의 모작입니다.<br><br>
 
 <img width="400" height="336" alt="image" src="https://github.com/user-attachments/assets/29d9fbc1-6b6f-46b5-af2c-753106140c58" />
 
